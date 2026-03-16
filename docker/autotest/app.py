@@ -58,6 +58,7 @@ def save_test_metadata(test_info: dict):
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     meta = {
         "test_id": test_info["test_id"],
+        "batch_id": test_info.get("batch_id"),
         "vehicle": test_info["vehicle"],
         "test": test_info["test"],
         "remote": test_info["remote"],
@@ -159,6 +160,7 @@ class TestRequest(BaseModel):
     ref: str = "master"
     waf_configure_args: list[str] = []
     waf_build_args: list[str] = []
+    batch_id: str | None = None
 
 
 class GitUpdateRequest(BaseModel):
@@ -734,6 +736,7 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
 def test_summary(t: dict) -> dict:
     return {
         "test_id": t["test_id"],
+        "batch_id": t.get("batch_id"),
         "vehicle": t["vehicle"],
         "test": t["test"],
         "remote": t["remote"],
@@ -811,18 +814,21 @@ async def api_status():
 
 
 @app.get("/autotest/api/tests")
-async def list_tests(limit: int = 100):
-    sorted_tests = sorted(
-        tests.values(), key=lambda t: t["created_at"], reverse=True
-    )
+async def list_tests(limit: int = 100, batch_id: str | None = None):
+    filtered = tests.values()
+    if batch_id:
+        filtered = [t for t in filtered if t.get("batch_id") == batch_id]
+    sorted_tests = sorted(filtered, key=lambda t: t["created_at"], reverse=True)
     return [test_summary(t) for t in sorted_tests[:limit]]
 
 
 @app.post("/autotest/api/tests")
 async def submit_test(req: TestRequest):
     test_id = f"{req.vehicle.lower()}-{uuid.uuid4().hex[:8]}"
+    batch_id = req.batch_id or None
     test_info = {
         "test_id": test_id,
+        "batch_id": batch_id,
         "vehicle": req.vehicle,
         "test": req.test,
         "remote": req.remote,
@@ -847,7 +853,7 @@ async def submit_test(req: TestRequest):
     )
     test_info["task"] = task
 
-    return {"test_id": test_id, "status": "submitted"}
+    return {"test_id": test_id, "batch_id": batch_id, "status": "submitted"}
 
 
 @app.get("/autotest/api/tests/{test_id}")
@@ -885,6 +891,79 @@ async def cancel_test(test_id: str):
     t["state"] = "CANCELLED"
     t["finished_at"] = time.time()
     return {"status": "cancelled"}
+
+
+# --- Batch API ---
+
+@app.get("/autotest/api/batches")
+async def list_batches():
+    """List all batch IDs with summary counts."""
+    batches: dict[str, dict] = {}
+    for t in tests.values():
+        bid = t.get("batch_id")
+        if not bid:
+            continue
+        if bid not in batches:
+            batches[bid] = {
+                "batch_id": bid,
+                "total": 0, "passed": 0, "failed": 0, "running": 0,
+                "vehicle": t["vehicle"], "remote": t["remote"], "ref": t["ref"],
+                "created_at": t["created_at"],
+            }
+        b = batches[bid]
+        b["total"] += 1
+        if t["state"] == "SUCCESS":
+            b["passed"] += 1
+        elif t["state"] in ("FAILURE", "ERROR"):
+            b["failed"] += 1
+        elif t["state"] in ("PENDING", "UPDATING", "BUILDING", "QUEUED", "TESTING"):
+            b["running"] += 1
+        b["created_at"] = min(b["created_at"], t["created_at"])
+    return sorted(batches.values(), key=lambda b: b["created_at"], reverse=True)
+
+
+@app.get("/autotest/api/batches/{batch_id}")
+async def get_batch(batch_id: str):
+    """Get all tests in a batch with their summaries."""
+    batch_tests = [
+        test_summary(t) for t in tests.values()
+        if t.get("batch_id") == batch_id
+    ]
+    if not batch_tests:
+        raise HTTPException(404, f"Batch '{batch_id}' not found")
+    batch_tests.sort(key=lambda t: t["test"])
+    passed = sum(1 for t in batch_tests if t["state"] == "SUCCESS")
+    failed = sum(1 for t in batch_tests if t["state"] in ("FAILURE", "ERROR"))
+    running = sum(1 for t in batch_tests if t["state"] in ("PENDING", "UPDATING", "BUILDING", "QUEUED", "TESTING"))
+    return {
+        "batch_id": batch_id,
+        "total": len(batch_tests),
+        "passed": passed,
+        "failed": failed,
+        "running": running,
+        "tests": batch_tests,
+    }
+
+
+@app.get("/autotest/api/batches/{batch_id}/logs")
+async def get_batch_logs(batch_id: str):
+    """Get structured logs for all tests in a batch."""
+    batch_tests = [
+        t for t in tests.values()
+        if t.get("batch_id") == batch_id
+    ]
+    if not batch_tests:
+        raise HTTPException(404, f"Batch '{batch_id}' not found")
+    batch_tests.sort(key=lambda t: t["test"])
+    result = []
+    for t in batch_tests:
+        result.append({
+            "test_id": t["test_id"],
+            "test": t["test"],
+            "state": t["state"],
+            "log": t["log"],
+        })
+    return {"batch_id": batch_id, "tests": result}
 
 
 # --- Git API ---

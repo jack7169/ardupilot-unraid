@@ -73,6 +73,12 @@ TESTS:
   ap-build test logs <test_id> [--tail N] [--follow]  View test logs
   ap-build test cancel <test_id>                      Cancel a running test
 
+BATCHES (multi-test submissions get auto-assigned batch IDs):
+  ap-build batch list                                 List all batches
+  ap-build batch status <batch_id>                    Show batch pass/fail counts + test list
+  ap-build batch summary <batch_id>                   Compact pass/fail summary
+  ap-build batch logs <batch_id>                      All logs for every test in the batch
+
 GIT (autotest repo):
   ap-build git remotes                                List git remotes
   ap-build git branches [--remote <name>]             List branches
@@ -316,6 +322,12 @@ test_submit() {
     [[ -z "$vehicle" || ${#test_targets[@]} -eq 0 ]] && \
         err "Usage: ap-build test submit <vehicle> <test1> [test2 ...] [--remote X] [--ref X] [--waf-configure \"flags\"] [--waf-build \"flags\"]"
 
+    # Generate batch ID for multi-test submissions
+    local batch_id=""
+    if [[ ${#test_targets[@]} -gt 1 ]]; then
+        batch_id="batch-$(date +%Y%m%d-%H%M%S)-$(head -c4 /dev/urandom | xxd -p)"
+    fi
+
     # Build waf args arrays
     local configure_args="[]"
     local build_args="[]"
@@ -327,6 +339,7 @@ test_submit() {
     fi
 
     info "Submitting ${#test_targets[@]} test(s) for ${vehicle} @ ${remote}/${ref}"
+    [[ -n "$batch_id" ]] && info "  Batch: ${batch_id}"
     [[ -n "$waf_configure" ]] && info "  waf configure: ${waf_configure}"
     [[ -n "$waf_build" ]] && info "  waf build: ${waf_build}"
 
@@ -340,7 +353,8 @@ test_submit() {
             --arg ref "$ref" \
             --argjson wc "$configure_args" \
             --argjson wb "$build_args" \
-            '{vehicle: $v, test: $t, remote: $r, ref: $ref, waf_configure_args: $wc, waf_build_args: $wb}')
+            --arg bid "$batch_id" \
+            '{vehicle: $v, test: $t, remote: $r, ref: $ref, waf_configure_args: $wc, waf_build_args: $wb} + (if $bid != "" then {batch_id: $bid} else {} end)')
 
         local response
         response=$(api_post "${AUTOTEST_API}/tests" "$payload")
@@ -353,11 +367,16 @@ test_submit() {
 
     echo ""
     echo -e "${BOLD}${#submitted_ids[@]} test(s) submitted${NC}"
-    echo -e "Track progress:"
-    echo -e "  ap-build test list"
-    for tid in "${submitted_ids[@]}"; do
-        echo -e "  ap-build test logs ${tid} --follow"
-    done
+    if [[ -n "$batch_id" ]]; then
+        echo -e "Batch: ${BOLD}${batch_id}${NC}"
+        echo -e "Track progress:"
+        echo -e "  ap-build batch status ${batch_id}"
+        echo -e "  ap-build batch logs ${batch_id}"
+    else
+        echo -e "Track progress:"
+        echo -e "  ap-build test status ${submitted_ids[0]}"
+        echo -e "  ap-build test logs ${submitted_ids[0]} --follow"
+    fi
 }
 
 test_list() {
@@ -520,6 +539,82 @@ git_update() {
 }
 
 # ============================================================
+# BATCH COMMANDS
+# ============================================================
+
+batch_list() {
+    api_get "${AUTOTEST_API}/batches" | jq -r '
+        .[] | "\(.batch_id)\t\(.vehicle)\t\(.remote)/\(.ref)\t\(.passed)/\(.total) passed\t\(.failed) failed\t\(.running) running"
+    ' | column -t -s $'\t'
+}
+
+batch_status() {
+    local batch_id="${1:?Usage: ap-build batch status <batch_id>}"
+    local data
+    data=$(api_get "${AUTOTEST_API}/batches/${batch_id}")
+
+    local total passed failed running
+    total=$(echo "$data" | jq -r '.total')
+    passed=$(echo "$data" | jq -r '.passed')
+    failed=$(echo "$data" | jq -r '.failed')
+    running=$(echo "$data" | jq -r '.running')
+
+    echo -e "${BOLD}Batch ${batch_id}${NC}"
+    echo -e "  Total:   ${total}"
+    echo -e "  Passed:  ${GREEN}${passed}${NC}"
+    echo -e "  Failed:  ${RED}${failed}${NC}"
+    echo -e "  Running: ${CYAN}${running}${NC}"
+    echo ""
+    echo "$data" | jq -r '.tests[] | "\(.test_id)\t\(.test)\t\(.state)"' | column -t -s $'\t'
+}
+
+batch_logs() {
+    local batch_id="${1:?Usage: ap-build batch logs <batch_id>}"
+    local data
+    data=$(api_get "${AUTOTEST_API}/batches/${batch_id}/logs")
+
+    local total
+    total=$(echo "$data" | jq -r '.tests | length')
+
+    echo "$data" | jq -r '.tests[] | "
+================================================================================
+TEST: \(.test_id) | \(.test) | \(.state)
+================================================================================
+\(.log)
+"'
+}
+
+batch_summary() {
+    local batch_id="${1:?Usage: ap-build batch summary <batch_id>}"
+    local data
+    data=$(api_get "${AUTOTEST_API}/batches/${batch_id}")
+
+    local total passed failed
+    total=$(echo "$data" | jq -r '.total')
+    passed=$(echo "$data" | jq -r '.passed')
+    failed=$(echo "$data" | jq -r '.failed')
+
+    echo -e "${BOLD}Batch ${batch_id}${NC} — ${passed}/${total} passed, ${failed} failed"
+    echo ""
+
+    # Show passed
+    local pass_list
+    pass_list=$(echo "$data" | jq -r '.tests[] | select(.state == "SUCCESS") | .test')
+    if [[ -n "$pass_list" ]]; then
+        echo -e "${GREEN}PASSED:${NC}"
+        echo "$pass_list" | sed 's/^/  /'
+    fi
+
+    # Show failed
+    local fail_list
+    fail_list=$(echo "$data" | jq -r '.tests[] | select(.state == "FAILURE" or .state == "ERROR") | .test')
+    if [[ -n "$fail_list" ]]; then
+        echo -e "${RED}FAILED:${NC}"
+        echo "$fail_list" | sed 's/^/  /'
+    fi
+}
+
+# ============================================================
 # MAIN
 # ============================================================
 
@@ -552,6 +647,16 @@ case "$cmd" in
             logs)   test_logs "$@" ;;
             cancel) test_cancel "$@" ;;
             *) err "Unknown test command: $subcmd" ;;
+        esac
+        ;;
+    batch)
+        subcmd="${1:?Usage: ap-build batch <list|status|logs|summary>}"; shift
+        case "$subcmd" in
+            list)    batch_list ;;
+            status)  batch_status "$@" ;;
+            logs)    batch_logs "$@" ;;
+            summary) batch_summary "$@" ;;
+            *) err "Unknown batch command: $subcmd" ;;
         esac
         ;;
     git)
