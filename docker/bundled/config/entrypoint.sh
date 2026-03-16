@@ -1,13 +1,13 @@
 #!/bin/sh
 set -e
 
-# Ensure data directories exist (skip if symlink)
-for dir in /data/custombuild-base/configs /data/autotest-workdir /data/autotest-results /data/buildlogs; do
-    [ -e "$dir" ] || mkdir -p "$dir"
-done
+# Ensure data subdirectories exist
+mkdir -p /data/custombuild-base/configs /data/buildlogs
 
-# Fix ownership of data directories for ardupilot user
-find /data \! -user ardupilot -exec chown ardupilot '{}' + 2>/dev/null || true
+# Fix ownership of volume mount points for ardupilot user
+for dir in /data/custombuild-base /data/autotest-workdir /data/autotest-results /data/buildlogs /workdir; do
+    chown ardupilot:ardupilot "$dir" 2>/dev/null || true
+done
 
 # Set default env vars for supervisord %(ENV_*) interpolation
 export CBS_LOG_LEVEL="${CBS_LOG_LEVEL:-INFO}"

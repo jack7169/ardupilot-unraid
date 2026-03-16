@@ -21,7 +21,12 @@ services:
       CBS_BUILD_TIMEOUT_SEC: ${CBS_BUILD_TIMEOUT_SEC:-900}
       CBS_REMOTES_RELOAD_TOKEN: ${CBS_REMOTES_RELOAD_TOKEN:-}
     volumes:
-      - ardupilot-data:/data:rw
+      # Git-heavy volumes: native Docker volumes (btrfs/ext4 on vDisk, NOT shfs)
+      - autotest-workdir:/data/autotest-workdir:rw
+      - autotest-results:/data/autotest-results:rw
+      - custombuild-base:/data/custombuild-base:rw
+      - builder-workdir:/workdir:rw
+      # Log-heavy volumes: bind mount to array (large storage, metadata-light)
       - ardupilot-buildlogs:/data/buildlogs:rw
 
   # --- Cloudflare Tunnel: public ingress (optional sidecar) ---
@@ -36,12 +41,12 @@ services:
       - ardupilot
 
 volumes:
-  ardupilot-data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${DATA_DIR:-/mnt/user/appdata/ardupilot/bundled-data}
+  # Native Docker volumes — stored on Docker vDisk (btrfs), fast metadata ops
+  autotest-workdir:
+  autotest-results:
+  custombuild-base:
+  builder-workdir:
+  # Bind mount — stored on array (shfs), fine for logs
   ardupilot-buildlogs:
     driver: local
     driver_opts:
