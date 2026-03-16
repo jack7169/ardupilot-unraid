@@ -13,6 +13,7 @@
         .state-FAILURE, .state-ERROR { background-color: #dc3545 !important; }
         .state-BUILDING, .state-TESTING, .state-UPDATING { background-color: #0d6efd !important; }
         .state-PENDING { background-color: #ffc107 !important; color: #000 !important; }
+        .state-QUEUED { background-color: #17a2b8 !important; }
         .state-CANCELLED { background-color: #6c757d !important; }
         .status-idle { color: #28a745; }
         .status-busy { color: #0d6efd; }
@@ -58,12 +59,11 @@
                             <option value="">Loading...</option>
                         </select>
                     </div>
-                    <div class="col-md-4">
-                        <label class="form-label">Test <span class="text-muted small" id="subtest-count"></span></label>
-                        <select class="form-select" id="testSubtest" multiple size="5" style="font-size: 0.85em;">
-                            <option value="">Select a vehicle first</option>
-                        </select>
-                        <div class="form-text">Hold Ctrl/Cmd to select multiple. Leave empty to run all.</div>
+                    <div class="col-md-2">
+                        <label class="form-label">Tests</label>
+                        <button class="btn btn-outline-primary w-100" type="button" data-bs-toggle="collapse" data-bs-target="#subtestPicker">
+                            <i class="bi bi-list-check me-1"></i><span id="subtest-selected">All</span>
+                        </button>
                     </div>
                     <div class="col-md-2">
                         <label class="form-label">Remote</label>
@@ -75,12 +75,29 @@
                         <label class="form-label">Ref</label>
                         <div class="input-group">
                             <input type="text" class="form-control" id="testRef" value="master" placeholder="branch/tag/SHA" list="refSuggestions">
-                            <button class="btn btn-outline-secondary" type="button" onclick="loadBranches()" title="Load branches"><i class="bi bi-arrow-clockwise"></i></button>
+                            <button class="btn btn-outline-dark" type="button" onclick="loadBranches()" title="Load branches"><i class="bi bi-arrow-clockwise"></i></button>
                         </div>
                         <datalist id="refSuggestions"></datalist>
                     </div>
                     <div class="col-md-2">
                         <button class="btn btn-primary w-100" onclick="submitTest()"><i class="bi bi-play-fill me-1"></i>Run Test</button>
+                    </div>
+                </div>
+                <!-- Subtest picker (collapsed by default) -->
+                <div class="collapse mt-2" id="subtestPicker">
+                    <div class="card card-body p-2">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="small fw-bold">Select tests <span class="text-muted" id="subtest-count"></span></span>
+                            <div>
+                                <button class="btn btn-sm btn-outline-secondary me-1" onclick="document.querySelectorAll('#testSubtest option').forEach(o=>o.selected=true);updateSelectedCount()">All</button>
+                                <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('testSubtest').selectedIndex=-1;updateSelectedCount()">None</button>
+                            </div>
+                        </div>
+                        <input type="text" class="form-control form-control-sm mb-2" id="subtestFilter" placeholder="Filter tests..." oninput="filterSubtests()">
+                        <select class="form-select form-select-sm" id="testSubtest" multiple size="10" style="font-family: monospace; font-size: 0.8em;" onchange="updateSelectedCount()">
+                            <option value="">Select a vehicle first</option>
+                        </select>
+                        <div class="form-text">Hold Ctrl/Cmd to select multiple. Leave empty to run full suite.</div>
                     </div>
                 </div>
                 <!-- Advanced options -->
@@ -257,7 +274,7 @@
             }
 
             tbody.innerHTML = tests.map(t => {
-                const isRunning = ['PENDING', 'UPDATING', 'BUILDING', 'TESTING'].includes(t.state);
+                const isRunning = ['PENDING', 'UPDATING', 'BUILDING', 'QUEUED', 'TESTING'].includes(t.state);
                 return `<tr>
                     <td><code class="small">${esc(t.test_id)}</code></td>
                     <td>${esc(t.vehicle)}</td>
@@ -274,6 +291,20 @@
                     </td>
                 </tr>`;
             }).join('');
+        }
+
+        // --- Subtest picker ---
+        function filterSubtests() {
+            const q = document.getElementById('subtestFilter').value.toLowerCase();
+            document.querySelectorAll('#testSubtest option').forEach(o => {
+                o.style.display = o.value.toLowerCase().includes(q) ? '' : 'none';
+            });
+        }
+
+        function updateSelectedCount() {
+            const sel = document.getElementById('testSubtest');
+            const count = Array.from(sel.selectedOptions).length;
+            document.getElementById('subtest-selected').textContent = count ? `${count} selected` : 'All';
         }
 
         // --- Dropdowns ---

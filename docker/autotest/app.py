@@ -29,6 +29,10 @@ BUILDLOGS_DIR = Path(os.environ.get("BUILDLOGS_DIR", "/buildlogs"))
 # Serialize git operations — concurrent submodule updates deadlock on shared .git
 git_lock = asyncio.Lock()
 
+# Serialize SITL test execution — SITL binds to fixed ports (5760 etc)
+# Tests queue here after build completes, run one at a time
+sitl_lock = asyncio.Lock()
+
 tests: dict[str, dict] = {}
 
 # Cache of ready-to-copy template worktrees keyed by commit SHA
@@ -581,34 +585,39 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
         test_info["log"] += f"Copy ready: {wt_path}\n\n"
         flush_log(test_info)
 
-        # Run the test with isolated BUILDLOGS env
-        test_info["state"] = "TESTING"
-        test_info["log"] += f"\n=== Running: {test_target} ===\n"
-        test_info["log"] += f"=== BUILDLOGS: {test_buildlogs} ===\n"
-        test_info["log"] += "=" * 60 + "\n"
+        # SITL binds to fixed ports — serialize test execution
+        test_info["state"] = "QUEUED"
+        test_info["log"] += f"\n=== Waiting for SITL slot ===\n"
+        flush_log(test_info)
 
-        proc = await asyncio.create_subprocess_exec(
-            "python3", "Tools/autotest/autotest.py", test_target,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=wt_path,
-            env=test_env,
-        )
-        test_info["process"] = proc
+        async with sitl_lock:
+            test_info["state"] = "TESTING"
+            test_info["log"] += f"=== Running: {test_target} ===\n"
+            test_info["log"] += f"=== BUILDLOGS: {test_buildlogs} ===\n"
+            test_info["log"] += "=" * 60 + "\n"
+            flush_log(test_info)
 
-        line_count = 0
-        while True:
-            line = await proc.stdout.readline()
-            if not line:
-                break
-            test_info["log"] += line.decode(errors="replace")
-            line_count += 1
-            # Flush to disk every 100 lines
-            if line_count % 100 == 0:
-                flush_log(test_info)
+            proc = await asyncio.create_subprocess_exec(
+                "python3", "Tools/autotest/autotest.py", test_target,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=wt_path,
+                env=test_env,
+            )
+            test_info["process"] = proc
 
-        await proc.wait()
-        test_info["process"] = None
+            line_count = 0
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                test_info["log"] += line.decode(errors="replace")
+                line_count += 1
+                if line_count % 100 == 0:
+                    flush_log(test_info)
+
+            await proc.wait()
+            test_info["process"] = None
 
         if proc.returncode == 0:
             test_info["state"] = "SUCCESS"
@@ -710,7 +719,7 @@ async def list_test_suites():
 
 @app.get("/autotest/api/status")
 async def api_status():
-    running_states = ("UPDATING", "BUILDING", "TESTING")
+    running_states = ("UPDATING", "BUILDING", "TESTING", "QUEUED")
     running = [t for t in tests.values() if t["state"] in running_states]
     return {
         "status": "busy" if running else "idle",
@@ -783,7 +792,7 @@ async def cancel_test(test_id: str):
     if test_id not in tests:
         raise HTTPException(404, f"Test '{test_id}' not found")
     t = tests[test_id]
-    if t["state"] not in ("UPDATING", "BUILDING", "TESTING", "PENDING"):
+    if t["state"] not in ("UPDATING", "BUILDING", "TESTING", "QUEUED", "PENDING"):
         raise HTTPException(400, f"Test is not running (state: {t['state']})")
 
     proc = t.get("process")
