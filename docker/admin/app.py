@@ -688,6 +688,60 @@ async def force_refresh():
     return {"status": "ok"}
 
 
+@app.get("/admin/api/validate")
+async def validate_remotes():
+    """Check each remote/release ref is resolvable via git ls-remote."""
+    import asyncio
+    remotes = read_remotes()
+    results = {}
+
+    async def check_remote(remote):
+        name = remote["name"]
+        url = remote["url"]
+        remote_result = {"url_ok": False, "vehicles": {}}
+
+        # Check remote URL is reachable
+        proc = await asyncio.create_subprocess_exec(
+            "git", "ls-remote", "--heads", "--tags", url,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            remote_result["error"] = "Timeout reaching remote"
+            results[name] = remote_result
+            return
+
+        if proc.returncode != 0:
+            remote_result["error"] = stderr.decode(errors="replace").strip()
+            results[name] = remote_result
+            return
+
+        remote_result["url_ok"] = True
+        available_refs = stdout.decode(errors="replace")
+
+        for vehicle in remote.get("vehicles", []):
+            vehicle_releases = []
+            for idx, rel in enumerate(vehicle.get("releases", [])):
+                ref = rel.get("commit_reference", "")
+                # Check if ref appears in ls-remote output or looks like a SHA
+                found = ref in available_refs or (len(ref) >= 40 and not ref.startswith("refs/"))
+                vehicle_releases.append({
+                    "index": idx,
+                    "commit_reference": ref,
+                    "valid": found,
+                })
+            remote_result["vehicles"][vehicle["name"]] = vehicle_releases
+
+        results[name] = remote_result
+
+    await asyncio.gather(*[check_remote(r) for r in remotes])
+    return results
+
+
 # --- Results Page ---
 
 def extract_body_content(html: str) -> str:

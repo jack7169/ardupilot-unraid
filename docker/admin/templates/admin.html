@@ -38,7 +38,7 @@
 
     <div class="container-fluid px-3 py-3">
         <!-- Actions bar -->
-        <div class="d-flex justify-content-end mb-3">
+        <div class="d-flex justify-content-end gap-2 mb-3">
             <button class="btn btn-warning" onclick="refreshRemotes()"><i class="bi bi-arrow-clockwise me-2"></i>Reload CustomBuild</button>
         </div>
 
@@ -255,11 +255,36 @@
     <script>
         const API = '/admin/api';
         let remotesData = [];
+        let validationData = {};
 
         async function fetchAndRender() {
             const resp = await fetch(`${API}/remotes`);
             remotesData = await resp.json();
             renderRemotes();
+            validateAll();
+        }
+
+        async function validateAll() {
+            try {
+                const resp = await fetch(`${API}/validate`);
+                validationData = await resp.json();
+                renderRemotes();
+            } catch (e) {
+                console.warn('Validation failed:', e);
+            }
+        }
+
+        function refValidationBadge(remoteName, vehicleName, idx) {
+            const rd = validationData[remoteName];
+            if (!rd) return '';
+            if (!rd.url_ok) return ' <i class="bi bi-exclamation-triangle text-danger" title="Remote unreachable"></i>';
+            const vd = rd.vehicles && rd.vehicles[vehicleName];
+            if (!vd) return '';
+            const entry = vd.find(e => e.index === idx);
+            if (!entry) return '';
+            return entry.valid
+                ? ' <i class="bi bi-check-circle text-success" title="Ref found"></i>'
+                : ' <i class="bi bi-exclamation-triangle text-warning" title="Ref not found on remote"></i>';
         }
 
         function renderRemotes() {
@@ -275,6 +300,7 @@
                             <i class="bi bi-git me-2"></i>
                             <strong>${esc(remote.name)}</strong>
                             <a href="${esc(remote.url).replace('.git','')}" target="_blank" class="text-muted ms-2"><i class="bi bi-github me-1"></i>${esc(remote.url)}</a>
+                            ${validationData[remote.name] ? (validationData[remote.name].url_ok ? '<span class="badge bg-success ms-2">reachable</span>' : '<span class="badge bg-danger ms-2">' + esc(validationData[remote.name].error || 'unreachable') + '</span>') : ''}
                         </div>
                         <div>
                             <button class="btn btn-sm btn-outline-primary me-1" onclick="showEditRemote('${esc(remote.name)}')">
@@ -314,7 +340,7 @@
                                             <tr>
                                                 <td>${esc(rel.release_type)}</td>
                                                 <td>${esc(rel.version_number)}</td>
-                                                <td><code>${esc(rel.commit_reference)}</code></td>
+                                                <td><code>${esc(rel.commit_reference)}</code>${refValidationBadge(remote.name, vehicle.name, idx)}</td>
                                                 <td>${rel.ap_build_artifacts_url ? `<a href="${esc(rel.ap_build_artifacts_url)}" target="_blank" class="text-truncate d-inline-block" style="max-width:200px">${esc(rel.ap_build_artifacts_url)}</a>` : '<span class="text-muted">-</span>'}</td>
                                                 <td>
                                                     <button class="btn btn-sm btn-outline-secondary me-1" onclick="showCopyRelease('${esc(remote.name)}', '${esc(vehicle.name)}', ${idx})" title="Copy to..."><i class="bi bi-clipboard"></i></button>
