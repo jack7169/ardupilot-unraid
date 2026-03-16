@@ -654,27 +654,32 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
 
         await ensure_repo()
 
-        # Phase 1: Resolve commit (short lock for git fetch serialization)
-        async with _fetch_lock:
-            found, resolved = await commit_is_local(ref, remote)
-            if not found or not resolved:
-                test_info["log"] += f"Ref not local, fetching {remote}...\n"
-                await flush_log(test_info)
-                fetch_out = await fetch_remote(remote, ref=ref)
-                test_info["log"] += fetch_out + "\n"
-            else:
-                test_info["log"] += f"Ref local ({resolved[:12]})\n"
+        # Phase 1: Resolve commit — local checks are lock-free, only fetch serializes
+        found, resolved = await commit_is_local(ref, remote)
+        if not found or not resolved:
+            async with _fetch_lock:
+                # Re-check after acquiring lock (another test may have fetched)
+                found, resolved = await commit_is_local(ref, remote)
+                if not found or not resolved:
+                    test_info["log"] += f"Ref not local, fetching {remote}...\n"
+                    await flush_log(test_info)
+                    fetch_out = await fetch_remote(remote, ref=ref)
+                    test_info["log"] += fetch_out + "\n"
+                    found, resolved = True, None  # fetched, now resolve below
+                else:
+                    test_info["log"] += f"Ref local ({resolved[:12]})\n"
+        else:
+            test_info["log"] += f"Ref local ({resolved[:12]})\n"
 
-            if pinned_commit:
-                commit = pinned_commit
-                test_info["log"] += f"Using pinned commit: {commit}\n"
-            elif resolved:
-                commit = resolved
-                test_info["log"] += f"Resolved to: {commit}\n"
-            else:
-                commit = await resolve_ref(remote, ref)
-                test_info["log"] += f"Resolved to: {commit}\n"
-        # _fetch_lock released — other tests can fetch while we create template
+        if pinned_commit:
+            commit = pinned_commit
+            test_info["log"] += f"Using pinned commit: {commit}\n"
+        elif resolved:
+            commit = resolved
+            test_info["log"] += f"Resolved to: {commit}\n"
+        else:
+            commit = await resolve_ref(remote, ref)
+            test_info["log"] += f"Resolved to: {commit}\n"
 
         # Phase 2: Get or create template (per-commit lock)
         template_path = None
