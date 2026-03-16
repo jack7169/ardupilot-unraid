@@ -29,8 +29,15 @@ WORKTREES_DIR = WORKDIR / "worktrees"
 RESULTS_DIR = Path(os.environ.get("AUTOTEST_RESULTS_DIR", "/results"))
 BUILDLOGS_DIR = Path(os.environ.get("BUILDLOGS_DIR", "/buildlogs"))
 
-# Serialize git operations — concurrent submodule updates deadlock on shared .git
-git_lock = asyncio.Lock()
+# --- Locks ---
+# Serialize git fetch operations (short-held, ~30s max)
+_fetch_lock = asyncio.Lock()
+# Per-commit locks for template creation (independent commits build in parallel)
+_template_cache_guard = asyncio.Lock()  # protects template_cache dict only
+_template_locks: dict[str, asyncio.Lock] = {}
+# Per-key locks for builds (different vehicles/configs build in parallel)
+_build_cache_guard = asyncio.Lock()  # protects build_cache dict only
+_build_key_locks: dict[str, asyncio.Lock] = {}
 
 # SITL instance pool — each instance gets unique ports via -I N (port + N*10)
 # This allows concurrent SITL execution without port conflicts
@@ -52,7 +59,6 @@ MAX_CACHED_TEMPLATES = 3
 build_cache: dict[str, dict] = {}
 BUILD_TEMPLATES_DIR = WORKDIR / "build_templates"
 MAX_CACHED_BUILDS = 3
-build_lock = asyncio.Lock()
 
 
 def save_test_metadata(test_info: dict):
@@ -328,40 +334,47 @@ async def get_or_create_template(commit: str) -> Path:
     """
     Get a cached template worktree for a commit, or create one.
     Templates are git worktrees with submodules initialized — ready to copy.
-    Must be called under git_lock.
+    Must be called under per-commit lock from _template_locks.
     """
-    if commit in template_cache:
-        entry = template_cache[commit]
-        if entry["path"].exists():
-            entry["last_used"] = time.time()
-            logger.info(f"Template cache HIT for {commit[:12]}")
-            return entry["path"]
-        else:
-            del template_cache[commit]
+    # Double-check cache (another task with same commit may have finished first)
+    async with _template_cache_guard:
+        if commit in template_cache:
+            entry = template_cache[commit]
+            if entry["path"].exists():
+                entry["last_used"] = time.time()
+                logger.info(f"Template cache HIT for {commit[:12]}")
+                return entry["path"]
+            else:
+                del template_cache[commit]
 
     logger.info(f"Template cache MISS for {commit[:12]}, creating...")
 
     # Evict oldest if at capacity
-    if len(template_cache) >= MAX_CACHED_TEMPLATES:
-        oldest_key = min(template_cache, key=lambda k: template_cache[k]["last_used"])
-        oldest = template_cache.pop(oldest_key)
-        logger.info(f"Evicting template {oldest_key[:12]}")
+    evict_entry = None
+    async with _template_cache_guard:
+        if len(template_cache) >= MAX_CACHED_TEMPLATES:
+            oldest_key = min(template_cache, key=lambda k: template_cache[k]["last_used"])
+            evict_entry = template_cache.pop(oldest_key)
+            logger.info(f"Evicting template {oldest_key[:12]}")
+    if evict_entry:
         await run_cmd(
-            ["git", "worktree", "unlock", str(oldest["path"])],
+            ["git", "worktree", "unlock", str(evict_entry["path"])],
             cwd=ARDUPILOT_DIR, timeout=10,
         )
         rc, _ = await run_cmd(
-            ["git", "worktree", "remove", "--force", str(oldest["path"])],
+            ["git", "worktree", "remove", "--force", str(evict_entry["path"])],
             cwd=ARDUPILOT_DIR, timeout=60,
         )
         if rc != 0:
-            shutil.rmtree(oldest["path"], ignore_errors=True)
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, shutil.rmtree, evict_entry["path"], True)
         await run_cmd(["git", "worktree", "prune"], cwd=ARDUPILOT_DIR)
 
     # Create template worktree
     tpl_path = TEMPLATES_DIR / f"tpl-{commit[:12]}"
     if tpl_path.exists():
-        shutil.rmtree(tpl_path, ignore_errors=True)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, shutil.rmtree, tpl_path, True)
 
     rc, out = await run_cmd(
         ["git", "worktree", "add", "--detach", str(tpl_path), commit],
@@ -389,7 +402,8 @@ async def get_or_create_template(commit: str) -> Path:
         cwd=ARDUPILOT_DIR, timeout=10,
     )
 
-    template_cache[commit] = {"path": tpl_path, "last_used": time.time()}
+    async with _template_cache_guard:
+        template_cache[commit] = {"path": tpl_path, "last_used": time.time()}
     logger.info(f"Template created for {commit[:12]} at {tpl_path}")
     return tpl_path
 
@@ -466,35 +480,47 @@ async def get_or_create_build_template(
 ) -> Path:
     """
     Get a cached pre-built template, or build one from the source template.
-    Must be called under build_lock.
+    Must be called under per-key lock from _build_key_locks.
     """
     key = build_cache_key(commit, vehicle, waf_configure_args, waf_build_args)
 
-    if key in build_cache and build_cache[key]["path"].exists():
-        build_cache[key]["last_used"] = time.time()
-        if log_cb:
-            log_cb(f"Build cache HIT ({key[:8]}): {vehicle} already built for {commit[:12]}\n")
-        logger.info(f"Build cache HIT: {key[:8]}")
-        return build_cache[key]["path"]
+    # Double-check cache (another task with same key may have finished first)
+    async with _build_cache_guard:
+        if key in build_cache and build_cache[key]["path"].exists():
+            build_cache[key]["last_used"] = time.time()
+            if log_cb:
+                log_cb(f"Build cache HIT ({key[:8]}): {vehicle} already built for {commit[:12]}\n")
+            logger.info(f"Build cache HIT: {key[:8]}")
+            return build_cache[key]["path"]
 
     if log_cb:
         log_cb(f"Build cache MISS ({key[:8]}): building {vehicle} for {commit[:12]}...\n")
     logger.info(f"Build cache MISS: {key[:8]}, building...")
 
     # Evict oldest if at capacity
-    if len(build_cache) >= MAX_CACHED_BUILDS:
-        oldest_key = min(build_cache, key=lambda k: build_cache[k]["last_used"])
-        oldest = build_cache.pop(oldest_key)
-        if oldest["path"].exists():
-            shutil.rmtree(oldest["path"], ignore_errors=True)
-        logger.info(f"Evicted build template {oldest_key[:8]}")
+    evict_path = None
+    async with _build_cache_guard:
+        if len(build_cache) >= MAX_CACHED_BUILDS:
+            oldest_key = min(build_cache, key=lambda k: build_cache[k]["last_used"])
+            oldest = build_cache.pop(oldest_key)
+            evict_path = oldest["path"]
+            logger.info(f"Evicted build template {oldest_key[:8]}")
+    if evict_path and evict_path.exists():
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, shutil.rmtree, evict_path, True)
 
     # Copy source template to build template dir
     bld_path = BUILD_TEMPLATES_DIR / f"bld-{key}-{vehicle.lower()}"
     if bld_path.exists():
-        shutil.rmtree(bld_path, ignore_errors=True)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, shutil.rmtree, bld_path, True)
 
-    await fast_copy(source_template, bld_path)
+    rc, out = await run_cmd(
+        ["cp", "-a", "--reflink=auto", str(source_template), str(bld_path)],
+        timeout=300,
+    )
+    if rc != 0:
+        raise RuntimeError(f"Failed to copy source template: {out}")
 
     # Configure
     configure_cmd = ["python3", "./waf", "configure", "--board", "sitl"]
@@ -506,7 +532,8 @@ async def get_or_create_build_template(
     if log_cb:
         log_cb(out + "\n")
     if rc != 0:
-        shutil.rmtree(bld_path, ignore_errors=True)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, shutil.rmtree, bld_path, True)
         raise RuntimeError(f"Build configure failed: {out[-200:]}")
 
     # Build
@@ -520,10 +547,12 @@ async def get_or_create_build_template(
     if log_cb:
         log_cb(out + "\n")
     if rc != 0:
-        shutil.rmtree(bld_path, ignore_errors=True)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, shutil.rmtree, bld_path, True)
         raise RuntimeError(f"Build failed: {out[-200:]}")
 
-    build_cache[key] = {"path": bld_path, "last_used": time.time()}
+    async with _build_cache_guard:
+        build_cache[key] = {"path": bld_path, "last_used": time.time()}
     if log_cb:
         log_cb(f"Build template cached: {bld_path}\n\n")
     logger.info(f"Build template created: {key[:8]} at {bld_path}")
@@ -532,12 +561,28 @@ async def get_or_create_build_template(
 
 # --- Test runner ---
 
-def flush_log(test_info: dict):
-    """Flush in-memory log and metadata to disk immediately."""
+def _append_file(path: Path, content: str):
+    with open(path, "a") as f:
+        f.write(content)
+
+
+async def flush_log(test_info: dict):
+    """Append only new log content to disk (O(n) total instead of O(n^2))."""
     log_path = RESULTS_DIR / test_info["test_id"] / "test.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_path.write_text(test_info["log"])
-    save_test_metadata(test_info)
+
+    current_log = test_info["log"]
+    flushed = test_info.get("_log_flushed_len", 0)
+
+    if len(current_log) > flushed:
+        new_content = current_log[flushed:]
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _append_file, log_path, new_content)
+        test_info["_log_flushed_len"] = len(current_log)
+
+    # Metadata is small — full rewrite is fine
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, save_test_metadata, test_info)
 
 
 def collect_artifacts(test_id: str, wt_path: Path, test_buildlogs: Path):
@@ -568,13 +613,16 @@ def collect_artifacts(test_id: str, wt_path: Path, test_buildlogs: Path):
             except Exception as e:
                 logger.warning(f"Failed to copy dataflash {item}: {e}")
 
-    # 3. Also copy to web-visible buildlogs directory for /results/ page
+    # 3. Symlink to web-visible buildlogs directory for /results/ page
     if BUILDLOGS_DIR.exists():
         web_dest = BUILDLOGS_DIR / f"autotest_{test_id}"
         try:
-            if web_dest.exists():
-                shutil.rmtree(web_dest)
-            shutil.copytree(dest, web_dest, dirs_exist_ok=True)
+            if web_dest.is_symlink() or web_dest.exists():
+                if web_dest.is_symlink():
+                    web_dest.unlink()
+                else:
+                    shutil.rmtree(web_dest)
+            web_dest.symlink_to(dest)
         except Exception as e:
             logger.warning(f"Failed to copy to buildlogs: {e}")
 
@@ -602,79 +650,105 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
         if pinned_commit:
             test_info["log"] += f" (pinned: {pinned_commit[:12]})"
         test_info["log"] += " ===\n"
-        flush_log(test_info)
+        await flush_log(test_info)
 
         await ensure_repo()
 
-        # All git + template ops under one lock acquisition to avoid redundant fetches
-        async with git_lock:
-            # Check if ref resolves locally first
+        # Phase 1: Resolve commit (short lock for git fetch serialization)
+        async with _fetch_lock:
             found, resolved = await commit_is_local(ref, remote)
-
-            if found and resolved and resolved in template_cache:
-                # Fast path: commit local + template cached = zero git API calls
-                test_info["log"] += f"Cache HIT: {resolved[:12]} (no fetch needed)\n"
-                template_path = template_cache[resolved]["path"]
-                template_cache[resolved]["last_used"] = time.time()
-                commit = resolved
+            if not found or not resolved:
+                test_info["log"] += f"Ref not local, fetching {remote}...\n"
+                await flush_log(test_info)
+                fetch_out = await fetch_remote(remote, ref=ref)
+                test_info["log"] += fetch_out + "\n"
             else:
-                # Need to fetch from remote
-                if not found or not resolved:
-                    test_info["log"] += f"Ref not local, fetching {remote}...\n"
-                    flush_log(test_info)
-                    fetch_out = await fetch_remote(remote, ref=ref)
-                    test_info["log"] += fetch_out + "\n"
-                else:
-                    test_info["log"] += f"Ref local ({resolved[:12]}) but no template, skipping fetch\n"
+                test_info["log"] += f"Ref local ({resolved[:12]})\n"
 
-                # Use pinned commit if provided, otherwise resolve from branch
-                if pinned_commit:
-                    commit = pinned_commit
-                    test_info["log"] += f"Using pinned commit: {commit}\n"
-                else:
-                    commit = await resolve_ref(remote, ref)
-                    test_info["log"] += f"Resolved to: {commit}\n"
+            if pinned_commit:
+                commit = pinned_commit
+                test_info["log"] += f"Using pinned commit: {commit}\n"
+            elif resolved:
+                commit = resolved
+                test_info["log"] += f"Resolved to: {commit}\n"
+            else:
+                commit = await resolve_ref(remote, ref)
+                test_info["log"] += f"Resolved to: {commit}\n"
+        # _fetch_lock released — other tests can fetch while we create template
 
-                # Double-check cache (another test may have created it while we waited)
-                if commit in template_cache and template_cache[commit]["path"].exists():
-                    test_info["log"] += f"Template appeared while waiting (cache HIT)\n"
-                    template_path = template_cache[commit]["path"]
-                    template_cache[commit]["last_used"] = time.time()
-                else:
+        # Phase 2: Get or create template (per-commit lock)
+        template_path = None
+        async with _template_cache_guard:
+            if commit in template_cache and template_cache[commit]["path"].exists():
+                template_cache[commit]["last_used"] = time.time()
+                template_path = template_cache[commit]["path"]
+                test_info["log"] += f"Template cache HIT: {commit[:12]}\n"
+
+        if template_path is None:
+            # Get per-commit lock (independent commits build templates in parallel)
+            async with _template_cache_guard:
+                if commit not in _template_locks:
+                    _template_locks[commit] = asyncio.Lock()
+                commit_lock = _template_locks[commit]
+
+            async with commit_lock:
+                # Double-check after acquiring per-commit lock
+                async with _template_cache_guard:
+                    if commit in template_cache and template_cache[commit]["path"].exists():
+                        template_cache[commit]["last_used"] = time.time()
+                        template_path = template_cache[commit]["path"]
+                        test_info["log"] += f"Template appeared while waiting (cache HIT)\n"
+                if template_path is None:
                     template_path = await get_or_create_template(commit)
 
-            test_info["log"] += f"Template: {template_path}\n"
-            flush_log(test_info)
+        test_info["log"] += f"Template: {template_path}\n"
+        await flush_log(test_info)
 
-        # Get or create pre-built template (serialized to avoid redundant builds)
+        # Get or create pre-built template (per-key lock: different builds run in parallel)
         test_info["state"] = "BUILDING"
         def build_log(msg):
             test_info["log"] += msg
-            flush_log(test_info)
 
-        async with build_lock:
-            try:
-                build_tpl = await get_or_create_build_template(
-                    commit, vehicle, waf_configure_args, waf_build_args,
-                    template_path, log_cb=build_log,
-                )
-            except RuntimeError as e:
-                test_info["state"] = "FAILURE"
-                test_info["log"] += f"\n{e}\n"
-                return
+        bld_key = build_cache_key(commit, vehicle, waf_configure_args, waf_build_args)
+        build_tpl = None
+
+        # Fast path: check cache under short guard
+        async with _build_cache_guard:
+            if bld_key in build_cache and build_cache[bld_key]["path"].exists():
+                build_cache[bld_key]["last_used"] = time.time()
+                build_tpl = build_cache[bld_key]["path"]
+                build_log(f"Build cache HIT ({bld_key[:8]}): {vehicle} already built for {commit[:12]}\n")
+
+        if build_tpl is None:
+            # Get or create per-key lock (only same build config serializes)
+            async with _build_cache_guard:
+                if bld_key not in _build_key_locks:
+                    _build_key_locks[bld_key] = asyncio.Lock()
+                key_lock = _build_key_locks[bld_key]
+
+            async with key_lock:
+                try:
+                    build_tpl = await get_or_create_build_template(
+                        commit, vehicle, waf_configure_args, waf_build_args,
+                        template_path, log_cb=build_log,
+                    )
+                except RuntimeError as e:
+                    test_info["state"] = "FAILURE"
+                    test_info["log"] += f"\n{e}\n"
+                    return
 
         # Fast copy from pre-built template — no git or build ops
         test_info["log"] += f"=== Copying pre-built source for {test_id} ===\n"
-        flush_log(test_info)
+        await flush_log(test_info)
         wt_path = await create_test_copy(test_id, build_tpl)
         test_info["worktree"] = str(wt_path)
         test_info["log"] += f"Copy ready: {wt_path}\n\n"
-        flush_log(test_info)
+        await flush_log(test_info)
 
         # Grab a SITL instance slot (each uses unique ports: base + instance*10)
         test_info["state"] = "QUEUED"
         test_info["log"] += f"\n=== Waiting for SITL instance ({sitl_instance_pool.qsize()}/{MAX_SITL_INSTANCES} free) ===\n"
-        flush_log(test_info)
+        await flush_log(test_info)
 
         instance_num = await sitl_instance_pool.get()
         try:
@@ -683,7 +757,7 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
             test_info["log"] += f"=== Running: {test_target} ===\n"
             test_info["log"] += f"=== BUILDLOGS: {test_buildlogs} ===\n"
             test_info["log"] += "=" * 60 + "\n"
-            flush_log(test_info)
+            await flush_log(test_info)
 
             # Port isolation for concurrent SITL instances.
             # SITL -I N offsets ALL ports by N*10: base_port, serial ports,
@@ -772,7 +846,7 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
                 test_info["log"] += line.decode(errors="replace")
                 line_count += 1
                 if line_count % 100 == 0:
-                    flush_log(test_info)
+                    await flush_log(test_info)
 
             await proc.wait()
             test_info["process"] = None
@@ -799,16 +873,18 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
         test_info["finished_at"] = time.time()
 
         # Final log flush
-        flush_log(test_info)
+        await flush_log(test_info)
 
-        # Collect all artifacts then remove the copy (no git ops needed)
+        # Collect all artifacts then remove the copy — run in executor to avoid
+        # blocking event loop on potentially large file I/O
+        loop = asyncio.get_event_loop()
         if wt_path:
-            collect_artifacts(test_id, wt_path, test_buildlogs)
-            cleanup_test_copy(test_id)
+            await loop.run_in_executor(None, collect_artifacts, test_id, wt_path, test_buildlogs)
+            await loop.run_in_executor(None, cleanup_test_copy, test_id)
 
         # Clean up isolated buildlogs dir
         if test_buildlogs.exists():
-            shutil.rmtree(test_buildlogs, ignore_errors=True)
+            await loop.run_in_executor(None, shutil.rmtree, test_buildlogs, True)
 
 
 def test_summary(t: dict) -> dict:
@@ -944,6 +1020,7 @@ async def submit_test(req: TestRequest):
         "created_at": time.time(),
         "finished_at": None,
         "log": "",
+        "_log_flushed_len": 0,
         "task": None,
         "process": None,
         "worktree": None,
