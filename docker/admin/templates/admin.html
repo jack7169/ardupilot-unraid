@@ -378,6 +378,7 @@
             const data = await resp.json();
             remotesData = data.remotes || remotesData;
             renderRemotes();
+            validateAll();
             return data;
         }
 
