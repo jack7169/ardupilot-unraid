@@ -12,6 +12,10 @@ services:
       - SYS_ADMIN
     ports:
       - "8000:8000"
+    networks:
+      default:
+        aliases:
+          - caddy
     environment:
       CBS_LOG_LEVEL: ${CBS_LOG_LEVEL:-INFO}
       CBS_BUILD_TIMEOUT_SEC: ${CBS_BUILD_TIMEOUT_SEC:-900}
@@ -28,7 +32,6 @@ services:
     command: tunnel run
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
-    network_mode: "service:ardupilot"
     depends_on:
       - ardupilot
 
