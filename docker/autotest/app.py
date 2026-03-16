@@ -52,13 +52,13 @@ tests: dict[str, dict] = {}
 # Each entry: {"path": Path, "last_used": float}
 template_cache: dict[str, dict] = {}
 TEMPLATES_DIR = WORKDIR / "templates"
-MAX_CACHED_TEMPLATES = 3
+MAX_CACHED_TEMPLATES = 10
 
 # Cache of pre-built templates keyed by (commit, vehicle, waf_configure, waf_build)
 # Each entry: {"path": Path, "last_used": float}
 build_cache: dict[str, dict] = {}
 BUILD_TEMPLATES_DIR = WORKDIR / "build_templates"
-MAX_CACHED_BUILDS = 3
+MAX_CACHED_BUILDS = 10
 
 
 def save_test_metadata(test_info: dict):
