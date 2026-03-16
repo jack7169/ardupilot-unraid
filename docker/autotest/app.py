@@ -602,8 +602,13 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
             test_info["log"] += "=" * 60 + "\n"
             flush_log(test_info)
 
-            # Replace SITL binaries in-place with shims that inject -I <instance>
-            # Autotest calls the binary by full path, so PATH shims don't work
+            # Port isolation for concurrent SITL instances:
+            # 1. Replace SITL binaries with shims that inject -I <instance>
+            #    (offsets SITL bind ports by instance*10)
+            # 2. Patch vehicle_test_suite.py so the autotest framework
+            #    connects to the offset ports too
+            port_offset = instance_num * 10
+
             bin_dir = wt_path / "build" / "sitl" / "bin"
             if bin_dir.exists():
                 for binary in bin_dir.iterdir():
@@ -615,6 +620,32 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
                                 f"#!/bin/bash\nexec {real} -I {instance_num} \"$@\"\n"
                             )
                             binary.chmod(0o755)
+
+            # Patch autotest framework to connect to offset ports
+            vts_path = wt_path / "Tools" / "autotest" / "vehicle_test_suite.py"
+            if vts_path.exists():
+                vts = vts_path.read_text()
+                vts = vts.replace(
+                    "def adjust_ardupilot_port(self, port):\n"
+                    "        '''adjust port in case we do not wish to use the default range (5760 and 5501 etc)'''\n"
+                    "        return port",
+                    "def adjust_ardupilot_port(self, port):\n"
+                    "        '''adjust port in case we do not wish to use the default range (5760 and 5501 etc)'''\n"
+                    f"        return port + {port_offset}",
+                )
+                vts = vts.replace(
+                    "def spare_network_port(self, offset=0):\n"
+                    "        '''returns a network port which should be able to be bound'''\n"
+                    "        if offset > 2:\n"
+                    "            raise ValueError(\"offset too large\")\n"
+                    "        return 8000 + offset",
+                    "def spare_network_port(self, offset=0):\n"
+                    "        '''returns a network port which should be able to be bound'''\n"
+                    "        if offset > 2:\n"
+                    "            raise ValueError(\"offset too large\")\n"
+                    f"        return {8000 + port_offset} + offset",
+                )
+                vts_path.write_text(vts)
 
             run_env = test_env
 
