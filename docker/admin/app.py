@@ -805,13 +805,18 @@ async def results_page(request: Request, path: str = ""):
 
 # --- Status Page ---
 
+_CBS_HOST = os.environ.get("CBS_APP_URL", "http://custombuild-app:8080").rstrip("/")
+_REDIS_HOST = os.environ.get("CBS_REDIS_HOST", "redis")
+_AUTOTEST_HOST = os.environ.get("AUTOTEST_URL", "http://autotest:8091").rstrip("/")
+_CADDY_HOST = os.environ.get("CADDY_URL", "http://caddy:8000").rstrip("/")
+
 SERVICES = [
-    {"name": "Custom Firmware Builder", "description": "Web UI and API for building custom firmware", "check": "http", "url": "http://custombuild-app:8080/api/v1/vehicles"},
-    {"name": "Build Worker", "description": "Processes firmware build jobs from the queue", "check": "dns", "host": "custombuild-builder"},
-    {"name": "Redis", "description": "Message queue and job broker", "check": "tcp", "host": "redis", "port": 6379},
+    {"name": "Custom Firmware Builder", "description": "Web UI and API for building custom firmware", "check": "http", "url": f"{_CBS_HOST}/api/v1/vehicles"},
+    {"name": "Build Worker", "description": "Processes firmware build jobs from the queue", "check": "tcp", "host": _REDIS_HOST, "port": 6379},
+    {"name": "Redis", "description": "Message queue and job broker", "check": "tcp", "host": _REDIS_HOST, "port": 6379},
     {"name": "Admin Service", "description": "Remotes management and status dashboard", "check": "self"},
-    {"name": "Autotest Runner", "description": "SITL test execution and git management", "check": "http", "url": "http://autotest:8091/autotest/api/status"},
-    {"name": "Reverse Proxy", "description": "Caddy - routes traffic to all services", "check": "http", "url": "http://caddy:8000/"},
+    {"name": "Autotest Runner", "description": "SITL test execution and git management", "check": "http", "url": f"{_AUTOTEST_HOST}/autotest/api/status"},
+    {"name": "Reverse Proxy", "description": "Caddy - routes traffic to all services", "check": "http", "url": f"{_CADDY_HOST}/"},
 ]
 
 
