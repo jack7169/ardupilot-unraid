@@ -368,10 +368,16 @@ async def get_or_create_template(commit: str) -> Path:
     if rc != 0:
         raise RuntimeError(f"Failed to create template worktree: {out}")
 
-    rc, out = await run_cmd(
-        ["git", "submodule", "update", "--init", "--recursive"],
-        cwd=tpl_path, timeout=300,
-    )
+    cpu_count = os.cpu_count() or 4
+    submodule_cmd = [
+        "git", "submodule", "update", "--init", "--recursive",
+        "--depth", "1",
+        f"--jobs={cpu_count}",
+    ]
+    # Use main repo's submodule objects as reference to avoid re-fetching
+    if (ARDUPILOT_DIR / ".git" / "modules").exists():
+        submodule_cmd.extend(["--reference", str(ARDUPILOT_DIR)])
+    rc, out = await run_cmd(submodule_cmd, cwd=tpl_path, timeout=300)
     if rc != 0:
         logger.warning(f"Submodule update issue for template {commit[:12]}: {out}")
 
