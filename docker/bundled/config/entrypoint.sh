@@ -1,11 +1,10 @@
 #!/bin/sh
 set -e
 
-# Ensure data directories exist
-mkdir -p /data/custombuild-base/configs \
-         /data/autotest-workdir \
-         /data/autotest-results \
-         /data/buildlogs
+# Ensure data directories exist (skip if symlink)
+for dir in /data/custombuild-base/configs /data/autotest-workdir /data/autotest-results /data/buildlogs; do
+    [ -e "$dir" ] || mkdir -p "$dir"
+done
 
 # Fix ownership of data directories for ardupilot user
 find /data \! -user ardupilot -exec chown ardupilot '{}' + 2>/dev/null || true

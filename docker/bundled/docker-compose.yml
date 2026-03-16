@@ -18,6 +18,7 @@ services:
       CBS_REMOTES_RELOAD_TOKEN: ${CBS_REMOTES_RELOAD_TOKEN:-}
     volumes:
       - ardupilot-data:/data:rw
+      - ardupilot-buildlogs:/data/buildlogs:rw
 
   # --- Cloudflare Tunnel: public ingress (optional sidecar) ---
   cloudflared:
@@ -38,3 +39,9 @@ volumes:
       type: none
       o: bind
       device: ${DATA_DIR:-/mnt/user/appdata/ardupilot/bundled-data}
+  ardupilot-buildlogs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${BUILDLOGS_DIR:-/mnt/user/appdata/ardupilot/buildlogs}
