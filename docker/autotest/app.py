@@ -958,14 +958,118 @@ async def get_batch(batch_id: str):
     passed = sum(1 for t in batch_tests if t["state"] == "SUCCESS")
     failed = sum(1 for t in batch_tests if t["state"] in ("FAILURE", "ERROR"))
     running = sum(1 for t in batch_tests if t["state"] in ("PENDING", "UPDATING", "BUILDING", "QUEUED", "TESTING"))
+    cancelled = sum(1 for t in batch_tests if t["state"] == "CANCELLED")
+    complete = running == 0
     return {
         "batch_id": batch_id,
+        "complete": complete,
         "total": len(batch_tests),
         "passed": passed,
         "failed": failed,
         "running": running,
+        "cancelled": cancelled,
         "tests": batch_tests,
     }
+
+
+@app.get("/autotest/api/batches/{batch_id}/wait")
+async def wait_for_batch(batch_id: str, timeout: int = Query(default=600, ge=1, le=3600)):
+    """
+    Long-poll endpoint: blocks until all tests in the batch are done or timeout.
+    Returns the full batch summary when complete. Ideal for AI agents and CI scripts.
+    Poll interval: 2s. Returns HTTP 408 on timeout.
+    """
+    running_states = ("PENDING", "UPDATING", "BUILDING", "QUEUED", "TESTING")
+    deadline = time.time() + timeout
+
+    while time.time() < deadline:
+        batch_tests = [
+            t for t in tests.values()
+            if t.get("batch_id") == batch_id
+        ]
+        if not batch_tests:
+            raise HTTPException(404, f"Batch '{batch_id}' not found")
+
+        still_running = sum(1 for t in batch_tests if t["state"] in running_states)
+        if still_running == 0:
+            # All done — return full summary
+            summaries = sorted(
+                [test_summary(t) for t in batch_tests], key=lambda t: t["test"]
+            )
+            passed = sum(1 for t in summaries if t["state"] == "SUCCESS")
+            failed = sum(1 for t in summaries if t["state"] in ("FAILURE", "ERROR"))
+            cancelled = sum(1 for t in summaries if t["state"] == "CANCELLED")
+            return {
+                "batch_id": batch_id,
+                "complete": True,
+                "total": len(summaries),
+                "passed": passed,
+                "failed": failed,
+                "cancelled": cancelled,
+                "tests": summaries,
+            }
+
+        await asyncio.sleep(2)
+
+    raise HTTPException(408, f"Timeout waiting for batch '{batch_id}' after {timeout}s")
+
+
+@app.get("/autotest/api/batches/{batch_id}/summary")
+async def batch_summary(batch_id: str):
+    """
+    Concise batch summary for AI agents: one-line-per-test with pass/fail and failure reason.
+    Designed to fit in a single LLM context window.
+    """
+    batch_tests = [
+        t for t in tests.values()
+        if t.get("batch_id") == batch_id
+    ]
+    if not batch_tests:
+        raise HTTPException(404, f"Batch '{batch_id}' not found")
+
+    batch_tests.sort(key=lambda t: t["test"])
+    running_states = ("PENDING", "UPDATING", "BUILDING", "QUEUED", "TESTING")
+    still_running = sum(1 for t in batch_tests if t["state"] in running_states)
+
+    lines = []
+    failures = []
+    for t in batch_tests:
+        test_name = t["test"].split(".")[-1] if "." in t["test"] else t["test"]
+        state = t["state"]
+        if state == "SUCCESS":
+            lines.append(f"  PASS  {test_name}")
+        elif state in ("FAILURE", "ERROR"):
+            # Extract failure reason from last few log lines
+            reason = ""
+            log_lines = t.get("log", "").strip().splitlines()
+            for line in reversed(log_lines[-20:]):
+                if "NotAchievedException" in line or "Exception" in line:
+                    reason = line.strip()
+                    break
+                if "FAILED" in line and "tests:" in line:
+                    reason = line.strip()
+                    break
+            lines.append(f"  FAIL  {test_name}")
+            if reason:
+                failures.append({"test": test_name, "test_id": t["test_id"], "reason": reason})
+        elif state == "CANCELLED":
+            lines.append(f"  SKIP  {test_name}")
+        else:
+            lines.append(f"  .... {test_name} ({state})")
+
+    passed = sum(1 for t in batch_tests if t["state"] == "SUCCESS")
+    failed = sum(1 for t in batch_tests if t["state"] in ("FAILURE", "ERROR"))
+
+    return PlainTextResponse(
+        f"Batch {batch_id} — {passed} passed, {failed} failed, "
+        f"{still_running} running, {len(batch_tests)} total\n"
+        f"Remote: {batch_tests[0]['remote']}/{batch_tests[0]['ref']}\n\n"
+        + "\n".join(lines)
+        + ("\n\nFailure details:\n" + "\n".join(
+            f"  {f['test']} ({f['test_id']}): {f['reason']}" for f in failures
+        ) if failures else "")
+        + "\n"
+    )
 
 
 @app.get("/autotest/api/batches/{batch_id}/logs")

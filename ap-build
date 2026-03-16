@@ -76,8 +76,9 @@ TESTS:
 BATCHES (multi-test submissions get auto-assigned batch IDs):
   ap-build batch list                                 List all batches
   ap-build batch status <batch_id>                    Show batch pass/fail counts + test list
-  ap-build batch summary <batch_id>                   Compact pass/fail summary
+  ap-build batch summary <batch_id>                   Compact pass/fail summary (AI-friendly)
   ap-build batch logs <batch_id>                      All logs for every test in the batch
+  ap-build batch wait <batch_id> [--timeout <secs>]   Block until batch completes (default 600s)
 
 GIT (autotest repo):
   ap-build git remotes                                List git remotes
@@ -586,31 +587,51 @@ TEST: \(.test_id) | \(.test) | \(.state)
 
 batch_summary() {
     local batch_id="${1:?Usage: ap-build batch summary <batch_id>}"
-    local data
-    data=$(api_get "${AUTOTEST_API}/batches/${batch_id}")
+    # Use the AI-friendly plaintext summary endpoint
+    curl -s "${AUTOTEST_API}/batches/${batch_id}/summary" 2>/dev/null || err "Failed to fetch batch summary"
+}
 
-    local total passed failed
-    total=$(echo "$data" | jq -r '.total')
-    passed=$(echo "$data" | jq -r '.passed')
-    failed=$(echo "$data" | jq -r '.failed')
+batch_wait() {
+    local batch_id="${1:?Usage: ap-build batch wait <batch_id>}"; shift
+    local timeout=600
 
-    echo -e "${BOLD}Batch ${batch_id}${NC} — ${passed}/${total} passed, ${failed} failed"
-    echo ""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --timeout) timeout="${2:?--timeout requires a value}"; shift 2 ;;
+            *) err "Unknown option: $1" ;;
+        esac
+    done
 
-    # Show passed
-    local pass_list
-    pass_list=$(echo "$data" | jq -r '.tests[] | select(.state == "SUCCESS") | .test')
-    if [[ -n "$pass_list" ]]; then
-        echo -e "${GREEN}PASSED:${NC}"
-        echo "$pass_list" | sed 's/^/  /'
-    fi
+    info "Waiting for batch ${batch_id} to complete (timeout: ${timeout}s)..."
 
-    # Show failed
-    local fail_list
-    fail_list=$(echo "$data" | jq -r '.tests[] | select(.state == "FAILURE" or .state == "ERROR") | .test')
-    if [[ -n "$fail_list" ]]; then
-        echo -e "${RED}FAILED:${NC}"
-        echo "$fail_list" | sed 's/^/  /'
+    local response
+    response=$(curl -s -w '\n%{http_code}' "${AUTOTEST_API}/batches/${batch_id}/wait?timeout=${timeout}" 2>/dev/null) || err "Cannot reach server"
+    local code="${response##*$'\n'}"
+    local body="${response%$'\n'*}"
+
+    if [[ "$code" == "408" ]]; then
+        echo -e "${YELLOW}Timeout after ${timeout}s — batch still running${NC}"
+        echo "$body" | jq -r '.detail // .' 2>/dev/null
+        exit 1
+    elif [[ "$code" -ge 200 && "$code" -lt 300 ]]; then
+        local total passed failed
+        total=$(echo "$body" | jq -r '.total')
+        passed=$(echo "$body" | jq -r '.passed')
+        failed=$(echo "$body" | jq -r '.failed')
+
+        echo -e "\n${BOLD}Batch ${batch_id} complete${NC}"
+        echo -e "  Total:  ${total}"
+        echo -e "  Passed: ${GREEN}${passed}${NC}"
+        echo -e "  Failed: ${RED}${failed}${NC}"
+        echo ""
+        echo "$body" | jq -r '.tests[] | "\(.state)\t\(.test)"' | \
+            sed "s/^SUCCESS/$(printf "${GREEN}PASS${NC}")/; s/^FAILURE/$(printf "${RED}FAIL${NC}")/; s/^ERROR/$(printf "${RED}ERR ${NC}")/" | \
+            column -t -s $'\t'
+
+        # Exit 0 if all passed, 1 if any failed
+        [[ "$failed" == "0" ]] && exit 0 || exit 1
+    else
+        err "$(echo "$body" | jq -r '.detail // .' 2>/dev/null || echo "$body") (HTTP $code)"
     fi
 }
 
@@ -650,12 +671,13 @@ case "$cmd" in
         esac
         ;;
     batch)
-        subcmd="${1:?Usage: ap-build batch <list|status|logs|summary>}"; shift
+        subcmd="${1:?Usage: ap-build batch <list|status|logs|summary|wait>}"; shift
         case "$subcmd" in
             list)    batch_list ;;
             status)  batch_status "$@" ;;
             logs)    batch_logs "$@" ;;
             summary) batch_summary "$@" ;;
+            wait)    batch_wait "$@" ;;
             *) err "Unknown batch command: $subcmd" ;;
         esac
         ;;
