@@ -175,10 +175,25 @@ ap-build test cancel <test_id>
 When submitting multiple tests, a batch ID is auto-generated (e.g., `batch-20260316-041500-a3f2`).
 
 ```bash
+# Submit a batch (2+ tests auto-generates a batch ID)
+ap-build test submit Plane \
+    test.QuadPlane.GPSDeniedQLoiterExtPos \
+    test.QuadPlane.GPSDeniedVTOLTransitionExtPos \
+    test.QuadPlane.GPSDeniedExtPosDropout \
+    --remote jack7169 --commit 423c00fc139f
+# Output:
+#   Batch: batch-20260316-041500-a3f2
+#   Track progress:
+#     ap-build batch status batch-20260316-041500-a3f2
+#     ap-build batch logs batch-20260316-041500-a3f2
+
+# Monitor the batch
 ap-build batch list                     # List all batches with pass/fail counts
 ap-build batch status <batch_id>        # Detailed status of every test in batch
 ap-build batch summary <batch_id>       # Compact pass/fail summary
 ap-build batch logs <batch_id>          # All logs for every test in batch
+ap-build batch wait <batch_id>          # Block until batch completes (default 600s timeout)
+ap-build batch wait <batch_id> --timeout 1200  # Custom timeout
 ```
 
 ### Git Management
