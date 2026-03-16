@@ -646,6 +646,24 @@ async def add_release(remote_name: str, vehicle_name: str, release: ReleaseIn):
     return {"status": "ok", "remotes": remotes}
 
 
+@app.put("/admin/api/remotes/{remote_name}/vehicles/{vehicle_name}/releases/{release_idx}")
+async def update_release(remote_name: str, vehicle_name: str, release_idx: int, release: ReleaseIn):
+    remotes = read_remotes()
+    remote = next((r for r in remotes if r["name"] == remote_name), None)
+    if not remote:
+        raise HTTPException(404, f"Remote '{remote_name}' not found")
+    vehicle = next((v for v in remote.get("vehicles", []) if v["name"] == vehicle_name), None)
+    if not vehicle:
+        raise HTTPException(404, f"Vehicle '{vehicle_name}' not found")
+    releases = vehicle.get("releases", [])
+    if release_idx < 0 or release_idx >= len(releases):
+        raise HTTPException(400, "Invalid release index")
+    releases[release_idx] = release.model_dump(exclude_none=True)
+    write_remotes(remotes)
+    await trigger_refresh()
+    return {"status": "ok", "remotes": remotes}
+
+
 @app.delete("/admin/api/remotes/{remote_name}/vehicles/{vehicle_name}/releases/{release_idx}")
 async def delete_release(remote_name: str, vehicle_name: str, release_idx: int):
     remotes = read_remotes()
