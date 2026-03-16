@@ -860,12 +860,19 @@ async def api_metrics():
 
 
 @app.get("/autotest/api/tests")
-async def list_tests(limit: int = 100, batch_id: str | None = None):
-    filtered = tests.values()
+async def list_tests(limit: int = 100, offset: int = 0, batch_id: str | None = None):
+    from fastapi.responses import JSONResponse
+    filtered = list(tests.values())
     if batch_id:
         filtered = [t for t in filtered if t.get("batch_id") == batch_id]
     sorted_tests = sorted(filtered, key=lambda t: t["created_at"], reverse=True)
-    return [test_summary(t) for t in sorted_tests[:limit]]
+    total = len(sorted_tests)
+    page = sorted_tests[offset:offset + limit] if limit > 0 else sorted_tests
+    data = [test_summary(t) for t in page]
+    resp = JSONResponse(content=data)
+    resp.headers["X-Total-Count"] = str(total)
+    resp.headers["Access-Control-Expose-Headers"] = "X-Total-Count"
+    return resp
 
 
 @app.post("/autotest/api/tests")
