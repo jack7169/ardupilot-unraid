@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     redis-server \
     supervisor \
     gosu \
+    sudo \
     curl \
     debian-keyring \
     debian-archive-keyring \
@@ -94,6 +95,9 @@ RUN ln -s /app/admin/templates /app/templates && \
 
 # Copy autotest service
 COPY --chown=ardupilot:ardupilot docker/autotest/app.py /app/autotest/
+
+# Allow ardupilot user to run mount/umount for overlay fs (autotest worktrees)
+RUN echo 'ardupilot ALL=(root) NOPASSWD: /bin/mount, /bin/umount' > /etc/sudoers.d/ardupilot-overlay
 
 # Set ownership on data directories
 RUN chown -R ardupilot:ardupilot /data /app /workdir /var/log/supervisor

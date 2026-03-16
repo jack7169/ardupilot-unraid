@@ -1,4 +1,4 @@
-# ArduPilot Build & Test Server
+# ArduPilot Firmware Webtools
 
 Self-hosted ArduPilot custom firmware builder and SITL autotest runner on Unraid. Public access at [jforbes.us](https://jforbes.us) via Cloudflare Tunnel with Zero Trust authentication.
 
@@ -307,7 +307,7 @@ Interactive API docs: [`/autotest/api/docs`](https://jforbes.us/autotest/api/doc
 
 ### Concurrency
 
-- **10 concurrent SITL instances** via instance pool with unique port offsets
+- **50 concurrent SITL instances** via instance pool with unique port offsets
 - Each instance gets ports at `base + instance_num * 10` to avoid collisions
 - The autotest framework is patched at runtime to match the port offsets
 
