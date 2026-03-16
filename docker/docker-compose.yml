@@ -1,0 +1,125 @@
+version: "3.8"
+
+services:
+  # --- CustomBuild: Redis ---
+  redis:
+    image: redis:7.4.2-alpine
+    container_name: ardupilot-redis
+    restart: always
+    volumes:
+      - redis-data:/data:rw
+    command: redis-server
+
+  # --- CustomBuild: Web App (built from upstream clone) ---
+  custombuild-app:
+    build:
+      context: /mnt/user/appdata/ardupilot/custombuild
+      dockerfile: ./web/Dockerfile
+    container_name: ardupilot-custombuild-app
+    restart: always
+    environment:
+      CBS_REDIS_HOST: redis
+      CBS_REDIS_PORT: 6379
+      CBS_BASEDIR: /base
+      CBS_LOG_LEVEL: ${CBS_LOG_LEVEL:-INFO}
+      CBS_ENABLE_INBUILT_BUILDER: 0
+      CBS_BUILD_TIMEOUT_SEC: ${CBS_BUILD_TIMEOUT_SEC:-900}
+      PYTHONPATH: /app
+      FORWARDED_ALLOW_IPS: "*"
+    volumes:
+      - custombuild-base:/base:rw
+      - /mnt/user/appdata/ardupilot/custombuild-templates:/app/web/templates:ro
+    depends_on:
+      - redis
+
+  # --- CustomBuild: Builder Worker (built from upstream clone) ---
+  custombuild-builder:
+    build:
+      context: /mnt/user/appdata/ardupilot/custombuild
+      dockerfile: ./builder/Dockerfile
+    container_name: ardupilot-custombuild-builder
+    restart: always
+    stop_grace_period: 5m
+    environment:
+      CBS_REDIS_HOST: redis
+      CBS_REDIS_PORT: 6379
+      CBS_BASEDIR: /base
+      CBS_LOG_LEVEL: ${CBS_LOG_LEVEL:-INFO}
+      CBS_BUILD_TIMEOUT_SEC: ${CBS_BUILD_TIMEOUT_SEC:-900}
+      PYTHONPATH: /app
+    volumes:
+      - custombuild-base:/base:rw
+    depends_on:
+      - redis
+
+  # --- Admin: Remotes management UI ---
+  admin:
+    build: ./admin
+    container_name: ardupilot-admin
+    restart: always
+    environment:
+      CBS_BASEDIR: /base
+      BUILDLOGS_DIR: /buildlogs
+      CBS_APP_URL: http://custombuild-app:8080
+      CBS_REMOTES_RELOAD_TOKEN: ${CBS_REMOTES_RELOAD_TOKEN:-}
+    volumes:
+      - custombuild-base:/base:rw
+      - ardupilot-logs:/buildlogs:ro
+
+  # --- Autotest: SITL test runner ---
+  autotest:
+    build: ./autotest
+    container_name: ardupilot-autotest
+    restart: always
+    stop_grace_period: 10m
+    environment:
+      AUTOTEST_WORKDIR: /workdir
+      AUTOTEST_RESULTS_DIR: /results
+      BUILDLOGS_DIR: /buildlogs
+    volumes:
+      - autotest-workdir:/workdir:rw
+      - ardupilot-logs:/buildlogs:rw
+      - autotest-results:/results:rw
+
+  # --- Caddy: Reverse proxy + static file server ---
+  caddy:
+    image: caddy:2-alpine
+    container_name: ardupilot-caddy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ardupilot-logs:/srv/buildlogs:ro
+    restart: unless-stopped
+    depends_on:
+      - custombuild-app
+      - admin
+      - autotest
+
+  # --- Cloudflare Tunnel: public ingress ---
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: ardupilot-cloudflared
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - caddy
+
+volumes:
+  ardupilot-logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/user/appdata/ardupilot/buildlogs
+  custombuild-base:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/user/appdata/ardupilot/custombuild-base
+  autotest-workdir:
+  autotest-results:
+  redis-data:

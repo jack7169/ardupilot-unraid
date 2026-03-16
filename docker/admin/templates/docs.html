@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Documentation</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet"
+        integrity="sha384-GLhlTQ8iRABdZLl6O3oVMWSktQOp6b7In1Zl3/Jr59b6EGGoI1aFkw7cmDA6j6gD" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css">
+    <style>
+        .docs-content { max-width: 900px; margin: 0 auto; }
+        .docs-content h2 { margin-top: 2rem; padding-bottom: 0.3rem; border-bottom: 1px solid #dee2e6; }
+        .docs-content h3 { margin-top: 1.5rem; }
+        .docs-content pre { background: #1e1e2e; color: #cdd6f4; padding: 16px; border-radius: 6px; overflow-x: auto; }
+        .docs-content code:not(pre code) { background: #e9ecef; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
+        .docs-content table { width: 100%; }
+        .docs-content table th { background: #f8f9fa; }
+        .docs-content table td, .docs-content table th { padding: 8px 12px; border: 1px solid #dee2e6; }
+        .repo-card { transition: transform 0.1s; }
+        .repo-card:hover { transform: translateY(-2px); }
+    </style>
+</head>
+<body class="bg-light">
+    <nav class="navbar bg-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/">
+                <img src="/static/images/ardupilot_logo.png" alt="ArduPilot" height="24" class="d-inline-block align-text-top">
+                <span class="ms-2 text-white" style="font-size: 25px;">carthagenas</span>
+            </a>
+            <div>
+                <a href="/" class="btn btn-outline-light me-1"><i class="bi bi-hammer me-2"></i>Builder</a>
+                <a href="/admin" class="btn btn-outline-light me-1"><i class="bi bi-gear me-2"></i>Admin</a>
+                <a href="/autotest" class="btn btn-outline-light me-1"><i class="bi bi-bug me-2"></i>Tests</a>
+                <a href="/results/" class="btn btn-outline-light me-1"><i class="bi bi-clipboard-data me-2"></i>Results</a>
+                <a href="/status" class="btn btn-outline-light me-1"><i class="bi bi-heart-pulse me-2"></i>Status</a>
+                <a href="/docs" class="btn btn-outline-light me-1 active"><i class="bi bi-book me-2"></i>Docs</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container py-4 docs-content">
+        <h1 class="mb-4">ArduPilot Build Server</h1>
+        <p class="lead text-muted">Self-hosted custom firmware build server for ArduPilot.</p>
+
+        <!-- Source Repositories -->
+        <h2><i class="bi bi-github me-2"></i>Source Repositories</h2>
+        <div class="row g-3 mb-4">
+            <div class="col-md-4">
+                <a href="https://github.com/jack7169/ardupilot-jack" target="_blank" class="text-decoration-none">
+                    <div class="card repo-card h-100">
+                        <div class="card-body">
+                            <h6 class="card-title"><i class="bi bi-git me-1"></i>jack7169/ardupilot-jack</h6>
+                            <p class="card-text text-muted small">Custom ArduPilot fork with ExtPos/EKF3 feature branches</p>
+                        </div>
+                    </div>
+                </a>
+            </div>
+            <div class="col-md-4">
+                <a href="https://github.com/ArduPilot/CustomBuild" target="_blank" class="text-decoration-none">
+                    <div class="card repo-card h-100">
+                        <div class="card-body">
+                            <h6 class="card-title"><i class="bi bi-git me-1"></i>ArduPilot/CustomBuild</h6>
+                            <p class="card-text text-muted small">Upstream custom firmware builder framework</p>
+                        </div>
+                    </div>
+                </a>
+            </div>
+            <div class="col-md-4">
+                <a href="https://github.com/ArduPilot/ardupilot" target="_blank" class="text-decoration-none">
+                    <div class="card repo-card h-100">
+                        <div class="card-body">
+                            <h6 class="card-title"><i class="bi bi-git me-1"></i>ArduPilot/ardupilot</h6>
+                            <p class="card-text text-muted small">Upstream ArduPilot firmware</p>
+                        </div>
+                    </div>
+                </a>
+            </div>
+        </div>
+
+        <!-- Web UI -->
+        <h2><i class="bi bi-layout-text-window me-2"></i>Web UI</h2>
+        <table class="table table-bordered">
+            <thead><tr><th>Page</th><th>URL</th><th>Description</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Builder</strong></td><td><a href="/">/</a></td><td>View active/completed builds, download artifacts</td></tr>
+                <tr><td><strong>Add Build</strong></td><td><a href="/add_build">/add_build</a></td><td>Select vehicle, version, board, and features to build</td></tr>
+                <tr><td><strong>Admin</strong></td><td><a href="/admin">/admin</a></td><td>Add/remove git remotes, vehicles, and release branches</td></tr>
+                <tr><td><strong>Results</strong></td><td><a href="/results/">/results/</a></td><td>Autotest results and build logs</td></tr>
+                <tr><td><strong>Status</strong></td><td><a href="/status">/status</a></td><td>Live system status dashboard for all components</td></tr>
+                <tr><td><strong>Docs</strong></td><td><a href="/docs">/docs</a></td><td>This page</td></tr>
+            </tbody>
+        </table>
+
+        <!-- CLI Tool -->
+        <h2><i class="bi bi-terminal me-2"></i>CLI Tool (<code>ap-build</code>)</h2>
+        <p>A command-line interface that talks to the same API as the web UI. Every build submitted via CLI appears on the web dashboard.</p>
+
+        <h3>Installation</h3>
+        <pre>cp ap-build /usr/local/bin/</pre>
+        <p>Requires <code>curl</code> and <code>jq</code>.</p>
+
+        <h3>Environment</h3>
+        <table class="table table-bordered">
+            <thead><tr><th>Variable</th><th>Default</th><th>Description</th></tr></thead>
+            <tbody>
+                <tr><td><code>AP_BUILD_API</code></td><td><code>http://carthagenas.local:8000/api/v1</code></td><td>API base URL</td></tr>
+            </tbody>
+        </table>
+        <p>For public access: <code>AP_BUILD_API=https://jforbes.us/api/v1</code></p>
+
+        <h3>List available options</h3>
+        <pre># List all vehicle types
+ap-build list vehicles
+
+# List versions for a vehicle (shows remote, type, and version ID)
+ap-build list versions plane
+
+# List boards for a specific version
+ap-build list boards plane &lt;version_id&gt;
+
+# List features with defaults for a board
+ap-build list features plane &lt;version_id&gt; CubeOrange
+
+# List recent builds (optionally filter by state)
+ap-build list builds
+ap-build list builds --state RUNNING</pre>
+
+        <h3>Submit a build</h3>
+        <pre># Build with default features
+ap-build submit plane &lt;version_id&gt; CubeOrange
+
+# Build with all features enabled
+ap-build submit plane &lt;version_id&gt; CubeOrange --all-features
+
+# Build with no optional features
+ap-build submit plane &lt;version_id&gt; CubeOrange --no-features
+
+# Build with specific features
+ap-build submit plane &lt;version_id&gt; CubeOrange --features HAL_ADSB_ENABLED,GPS</pre>
+
+        <h3>Monitor builds</h3>
+        <pre># Check build status
+ap-build status &lt;build_id&gt;
+
+# View build logs
+ap-build logs &lt;build_id&gt;
+
+# Stream logs in real-time
+ap-build logs &lt;build_id&gt; --follow
+
+# View last 50 lines
+ap-build logs &lt;build_id&gt; --tail 50</pre>
+
+        <h3>Download artifacts</h3>
+        <pre># Download firmware archive
+ap-build download &lt;build_id&gt;
+
+# Download to a specific file
+ap-build download &lt;build_id&gt; --output firmware.tar.gz</pre>
+
+        <h3>Example workflow</h3>
+        <pre># 1. Find the version ID for jack7169's latest Plane build
+ap-build list versions plane | grep jack7169
+
+# 2. Check available boards
+ap-build list boards plane &lt;version_id&gt;
+
+# 3. Submit a build
+ap-build submit plane &lt;version_id&gt; CubeOrangePlus
+
+# 4. Follow the build progress
+ap-build logs &lt;build_id&gt; --follow
+
+# 5. Download when complete
+ap-build download &lt;build_id&gt;</pre>
+
+        <!-- Autotest CLI -->
+        <h2><i class="bi bi-bug me-2"></i>Autotest (SITL Testing)</h2>
+        <p>Run ArduPilot's autotest suite against any branch, tag, or commit. Tests build SITL firmware and execute the test target.</p>
+
+        <h3>Submit a test</h3>
+        <pre># Run a test suite against a branch
+ap-build test submit Plane test.PlaneTests1b --remote jack7169 --ref feature/extpos-kalman-fusion
+
+# Test a specific tag
+ap-build test submit Plane test.PlaneTests1b --remote jack7169 --ref Plane-4.5.2
+
+# Test a specific commit
+ap-build test submit Plane test.PlaneTests1b --remote origin --ref abc123def
+
+# With custom waf flags
+ap-build test submit Plane test.PlaneTests1b --remote origin --ref master \
+    --waf-configure "--debug --enable-ekf3" --waf-build "-j8"</pre>
+
+        <h3>Monitor tests</h3>
+        <pre># List recent test runs
+ap-build test list
+
+# Check test status
+ap-build test status &lt;test_id&gt;
+
+# Stream test logs in real-time
+ap-build test logs &lt;test_id&gt; --follow
+
+# View last 100 lines
+ap-build test logs &lt;test_id&gt; --tail 100
+
+# Cancel a running test
+ap-build test cancel &lt;test_id&gt;</pre>
+
+        <!-- Git Management -->
+        <h2><i class="bi bi-git me-2"></i>Git Management</h2>
+        <p>Manage the autotest container's ardupilot git repository. Add remotes, fetch branches, and checkout any ref.</p>
+
+        <h3>Remotes and refs</h3>
+        <pre># List configured git remotes
+ap-build git remotes
+
+# List branches for a remote
+ap-build git branches --remote jack7169
+
+# List tags (optionally for a specific remote)
+ap-build git tags
+ap-build git tags --remote jack7169
+
+# Add a new git remote
+ap-build git add-remote jack7169 https://github.com/jack7169/ardupilot-jack.git</pre>
+
+        <h3>Update (fetch + checkout)</h3>
+        <pre># Fetch and checkout a branch
+ap-build git update --remote jack7169 --ref master
+
+# Fetch and checkout a tag
+ap-build git update --remote jack7169 --ref Plane-4.5.2
+
+# Fetch and checkout a commit SHA
+ap-build git update --remote origin --ref abc123def
+
+# Add a new remote and checkout in one step
+ap-build git update --remote-url https://github.com/user/ardupilot.git \
+    --remote-name newuser --ref main</pre>
+
+        <!-- REST API -->
+        <h2><i class="bi bi-braces me-2"></i>REST API</h2>
+        <p>The full API is available at <code>/api/v1/</code>.</p>
+        <table class="table table-bordered">
+            <thead><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr></thead>
+            <tbody>
+                <tr><td><code>GET</code></td><td><code>/api/v1/vehicles</code></td><td>List vehicle types</td></tr>
+                <tr><td><code>GET</code></td><td><code>/api/v1/vehicles/{id}/versions</code></td><td>List versions for a vehicle</td></tr>
+                <tr><td><code>GET</code></td><td><code>/api/v1/vehicles/{id}/versions/{vid}/boards</code></td><td>List boards</td></tr>
+                <tr><td><code>GET</code></td><td><code>/api/v1/vehicles/{id}/versions/{vid}/boards/{bid}/features</code></td><td>List features</td></tr>
+                <tr><td><code>POST</code></td><td><code>/api/v1/builds</code></td><td>Submit a new build</td></tr>
+                <tr><td><code>GET</code></td><td><code>/api/v1/builds</code></td><td>List builds</td></tr>
+                <tr><td><code>GET</code></td><td><code>/api/v1/builds/{id}</code></td><td>Get build status</td></tr>
+                <tr><td><code>GET</code></td><td><code>/api/v1/builds/{id}/logs</code></td><td>Get build logs</td></tr>
+                <tr><td><code>GET</code></td><td><code>/api/v1/builds/{id}/artifact</code></td><td>Download build artifact</td></tr>
+                <tr><td colspan="3" class="table-secondary"><strong>Autotest</strong></td></tr>
+                <tr><td><code>POST</code></td><td><code>/autotest/api/tests</code></td><td>Submit a SITL test</td></tr>
+                <tr><td><code>GET</code></td><td><code>/autotest/api/tests</code></td><td>List test runs</td></tr>
+                <tr><td><code>GET</code></td><td><code>/autotest/api/tests/{id}</code></td><td>Get test status</td></tr>
+                <tr><td><code>GET</code></td><td><code>/autotest/api/tests/{id}/logs</code></td><td>Get test logs</td></tr>
+                <tr><td><code>POST</code></td><td><code>/autotest/api/tests/{id}/cancel</code></td><td>Cancel a test</td></tr>
+                <tr><td colspan="3" class="table-secondary"><strong>Git</strong></td></tr>
+                <tr><td><code>POST</code></td><td><code>/autotest/api/git/update</code></td><td>Fetch + checkout ref</td></tr>
+                <tr><td><code>GET</code></td><td><code>/autotest/api/git/remotes</code></td><td>List git remotes</td></tr>
+                <tr><td><code>GET</code></td><td><code>/autotest/api/git/branches</code></td><td>List branches</td></tr>
+                <tr><td><code>GET</code></td><td><code>/autotest/api/git/tags</code></td><td>List tags</td></tr>
+                <tr><td><code>POST</code></td><td><code>/autotest/api/git/add-remote</code></td><td>Add a git remote</td></tr>
+            </tbody>
+        </table>
+
+        <!-- Architecture -->
+        <h2><i class="bi bi-diagram-3 me-2"></i>Architecture</h2>
+        <table class="table table-bordered">
+            <thead><tr><th>Service</th><th>Container</th><th>Description</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Custom Firmware Builder</strong></td><td><code>ardupilot-custombuild-app</code></td><td>FastAPI web UI and REST API for submitting and managing builds</td></tr>
+                <tr><td><strong>Build Worker</strong></td><td><code>ardupilot-custombuild-builder</code></td><td>Processes firmware build jobs from the Redis queue</td></tr>
+                <tr><td><strong>Redis</strong></td><td><code>ardupilot-redis</code></td><td>Message queue and job broker</td></tr>
+                <tr><td><strong>Admin</strong></td><td><code>ardupilot-admin</code></td><td>Remotes/branch management UI and system status dashboard</td></tr>
+                <tr><td><strong>Caddy</strong></td><td><code>ardupilot-caddy</code></td><td>Reverse proxy routing traffic to all services on port 8000</td></tr>
+                <tr><td><strong>Cloudflare Tunnel</strong></td><td><code>ardupilot-cloudflared</code></td><td>Secure public ingress via Cloudflare Zero Trust</td></tr>
+            </tbody>
+        </table>
+
+        <!-- Access -->
+        <h2><i class="bi bi-shield-lock me-2"></i>Access</h2>
+        <table class="table table-bordered">
+            <thead><tr><th>Access Method</th><th>URL</th><th>Authentication</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Public</strong></td><td><code>https://jforbes.us</code></td><td>Cloudflare Zero Trust OTP (<code>@s2va.mil</code>, <code>@tyrlaboratories.com</code>)</td></tr>
+                <tr><td><strong>LAN</strong></td><td><code>http://carthagenas.local:8000</code></td><td>None (direct access)</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js" integrity="sha384-w76AqPfDkMBDXo30jS1Sgez6pr3x5MlQ1ZAGC+nuZB+EYdgRZgiwxhTBTkF7CXvN" crossorigin="anonymous"></script>
+</body>
+</html>

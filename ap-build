@@ -1,0 +1,570 @@
+#!/usr/bin/env bash
+# ArduPilot Custom Build CLI
+# Submits builds and tests via the server API.
+
+set -euo pipefail
+
+BASE_URL="${AP_BUILD_URL:-http://carthagenas.local:8000}"
+API="${BASE_URL}/api/v1"
+AUTOTEST_API="${BASE_URL}/autotest/api"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+err() { echo -e "${RED}Error: $*${NC}" >&2; exit 1; }
+info() { echo -e "${CYAN}$*${NC}"; }
+success() { echo -e "${GREEN}$*${NC}"; }
+
+require_cmd() { command -v "$1" >/dev/null 2>&1 || err "Required command not found: $1"; }
+require_cmd curl
+require_cmd jq
+
+api_get() {
+    local response
+    response=$(curl -s -w '\n%{http_code}' "${1}" 2>/dev/null) || err "Cannot reach: GET $1"
+    local code="${response##*$'\n'}"
+    local body="${response%$'\n'*}"
+    [[ "$code" -ge 200 && "$code" -lt 300 ]] || err "$(echo "$body" | jq -r '.detail // .' 2>/dev/null || echo "$body") (HTTP $code)"
+    echo "$body"
+}
+api_post() {
+    local response
+    response=$(curl -s -w '\n%{http_code}' -X POST "${1}" -H 'Content-Type: application/json' -d "$2" 2>/dev/null) || err "Cannot reach: POST $1"
+    local code="${response##*$'\n'}"
+    local body="${response%$'\n'*}"
+    [[ "$code" -ge 200 && "$code" -lt 300 ]] || err "$(echo "$body" | jq -r '.detail // .' 2>/dev/null || echo "$body") (HTTP $code)"
+    echo "$body"
+}
+
+usage() {
+    cat <<'EOF'
+ArduPilot Build & Test CLI
+
+BUILDS:
+  ap-build list vehicles                              List available vehicles
+  ap-build list versions <vehicle>                    List versions for a vehicle
+  ap-build list boards <vehicle> <version>            List boards for a version
+  ap-build list features <vehicle> <version> <board>  List features for a board
+  ap-build list builds [--state STATE]                List recent builds
+
+  ap-build submit <vehicle> <version> <board>         Submit a firmware build
+    --features f1,f2,...   Enable specific features (comma-separated)
+    --all-features         Enable all features
+    --no-features          Disable all optional features
+
+  ap-build status <build_id>                          Check build status
+  ap-build logs <build_id> [--tail N] [--follow]      View build logs
+  ap-build download <build_id> [--output FILE]        Download build artifact
+
+TESTS:
+  ap-build test submit <vehicle> <test1> [test2 ...]  Submit SITL autotest(s)
+    --remote <name>                                     Git remote (default: origin)
+    --ref <branch|tag|sha>                              Git ref to test (default: master)
+    --waf-configure "<flags>"                            Extra waf configure flags
+    --waf-build "<flags>"                                Extra waf build flags
+
+  ap-build test list                                  List recent test runs
+  ap-build test status <test_id>                      Check test status
+  ap-build test logs <test_id> [--tail N] [--follow]  View test logs
+  ap-build test cancel <test_id>                      Cancel a running test
+
+GIT (autotest repo):
+  ap-build git remotes                                List git remotes
+  ap-build git branches [--remote <name>]             List branches
+  ap-build git tags [--remote <name>]                 List tags
+  ap-build git add-remote <name> <url>                Add a git remote
+  ap-build git update                                 Fetch + checkout a ref
+    --remote <name>          Remote name (default: origin)
+    --remote-url <url>       Remote URL (adds/updates the remote)
+    --ref <branch|tag|sha>   Ref to checkout (default: master)
+
+ENVIRONMENT:
+  AP_BUILD_URL   Base URL (default: http://carthagenas.local:8000)
+
+EXAMPLES:
+  ap-build list versions plane
+  ap-build submit plane ardupilot-refs-heads-master-e2f0bfbd CubeOrangePlus
+  ap-build test submit Plane test.PlaneTests1b --remote jack7169 --ref feature/extpos-kalman-fusion
+  ap-build test submit Plane test.PlaneTests1b.TestA test.PlaneTests1b.TestB --ref master
+  ap-build test submit Plane test.PlaneTests1b --ref Plane-4.5.2 --waf-configure "--debug"
+  ap-build test logs plane-a1b2c3d4 --follow
+  ap-build git update --remote jack7169 --ref master
+EOF
+    exit 0
+}
+
+# ============================================================
+# BUILD COMMANDS
+# ============================================================
+
+list_vehicles() {
+    api_get "${API}/vehicles" | jq -r '.[] | "\(.id)\t\(.name)"' | column -t -s $'\t'
+}
+
+list_versions() {
+    local vehicle="${1:?Usage: ap-build list versions <vehicle>}"
+    api_get "${API}/vehicles/${vehicle}/versions" | jq -r '.[] | "\(.id)\t\(.name)\t\(.type)"' | column -t -s $'\t'
+}
+
+list_boards() {
+    local vehicle="${1:?Usage: ap-build list boards <vehicle> <version>}"
+    local version="${2:?Usage: ap-build list boards <vehicle> <version>}"
+    api_get "${API}/vehicles/${vehicle}/versions/${version}/boards" | jq -r '.[] | .id' | sort
+}
+
+list_features() {
+    local vehicle="${1:?Usage: ap-build list features <vehicle> <version> <board>}"
+    local version="${2:?Usage: ap-build list features <vehicle> <version> <board>}"
+    local board="${3:?Usage: ap-build list features <vehicle> <version> <board>}"
+    api_get "${API}/vehicles/${vehicle}/versions/${version}/boards/${board}/features" | \
+        jq -r '.[] | "\(.id)\t\(.category.name)\t\(.default.enabled)\t\(.description // "-")"' | \
+        column -t -s $'\t'
+}
+
+list_builds() {
+    local state_filter=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --state) state_filter="?state=$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    api_get "${API}/builds${state_filter}" | jq -r '
+        .[] | "\(.build_id)\t\(.vehicle.name)\t\(.board.name)\t\(.version.remote_info.name)\t\(.progress.state)\t\(.progress.percent)%"
+    ' | column -t -s $'\t'
+}
+
+submit_build() {
+    local vehicle="" version="" board=""
+    local features_mode="default"
+    local features_list=""
+
+    [[ $# -ge 1 ]] && vehicle="$1" && shift
+    [[ $# -ge 1 ]] && version="$1" && shift
+    [[ $# -ge 1 ]] && board="$1" && shift
+
+    [[ -z "$vehicle" || -z "$version" || -z "$board" ]] && \
+        err "Usage: ap-build submit <vehicle> <version> <board> [--features f1,f2,...] [--all-features] [--no-features]"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --features) features_list="$2"; features_mode="list"; shift 2 ;;
+            --all-features) features_mode="all"; shift ;;
+            --no-features) features_mode="none"; shift ;;
+            *) err "Unknown flag: $1" ;;
+        esac
+    done
+
+    local selected_features="[]"
+    case "$features_mode" in
+        all)
+            info "Fetching all features..."
+            selected_features=$(api_get "${API}/vehicles/${vehicle}/versions/${version}/boards/${board}/features" | jq '[.[].id]')
+            ;;
+        none)
+            selected_features="[]"
+            ;;
+        list)
+            selected_features=$(echo "$features_list" | jq -R 'split(",")')
+            ;;
+        default)
+            info "Fetching default features..."
+            selected_features=$(api_get "${API}/vehicles/${vehicle}/versions/${version}/boards/${board}/features" | jq '[.[] | select(.default.enabled == true) | .id]')
+            ;;
+    esac
+
+    local feature_count
+    feature_count=$(echo "$selected_features" | jq 'length')
+    info "Submitting build: ${vehicle} / ${board} with ${feature_count} features..."
+
+    local payload
+    payload=$(jq -n \
+        --arg v "$vehicle" \
+        --arg b "$board" \
+        --arg ver "$version" \
+        --argjson f "$selected_features" \
+        '{vehicle_id: $v, board_id: $b, version_id: $ver, selected_features: $f}')
+
+    local response
+    response=$(api_post "${API}/builds" "$payload")
+
+    local build_id
+    build_id=$(echo "$response" | jq -r '.build_id')
+
+    success "Build submitted!"
+    echo -e "  Build ID:  ${BOLD}${build_id}${NC}"
+    echo -e "  Status:    $(echo "$response" | jq -r '.status')"
+    echo ""
+    echo -e "Track progress:"
+    echo -e "  ap-build status ${build_id}"
+    echo -e "  ap-build logs ${build_id} --follow"
+}
+
+show_build_status() {
+    local build_id="${1:?Usage: ap-build status <build_id>}"
+    local build
+    build=$(api_get "${API}/builds/${build_id}")
+
+    local state
+    state=$(echo "$build" | jq -r '.progress.state')
+    local color="$NC"
+    case "$state" in
+        SUCCESS) color="$GREEN" ;;
+        FAILURE|ERROR|TIMED_OUT) color="$RED" ;;
+        RUNNING) color="$CYAN" ;;
+        PENDING) color="$YELLOW" ;;
+    esac
+
+    echo -e "${BOLD}Build ${build_id}${NC}"
+    echo -e "  Vehicle:   $(echo "$build" | jq -r '.vehicle.name')"
+    echo -e "  Board:     $(echo "$build" | jq -r '.board.name')"
+    echo -e "  Remote:    $(echo "$build" | jq -r '.version.remote_info.name')"
+    echo -e "  Git Hash:  $(echo "$build" | jq -r '.version.git_hash')"
+    echo -e "  State:     ${color}${state}${NC}"
+    echo -e "  Progress:  $(echo "$build" | jq -r '.progress.percent')%"
+    echo -e "  Features:  $(echo "$build" | jq -r '.selected_features | length') enabled"
+}
+
+show_build_logs() {
+    local build_id="${1:?Usage: ap-build logs <build_id>}"; shift
+    local tail_n="" follow=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --tail) tail_n="$2"; shift 2 ;;
+            --follow) follow=true; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    local tail_param=""
+    [[ -n "$tail_n" ]] && tail_param="?tail=${tail_n}"
+
+    if [[ "$follow" == true ]]; then
+        local prev_lines=0
+        while true; do
+            local logs
+            logs=$(curl -sf "${API}/builds/${build_id}/logs" 2>/dev/null || echo "")
+            if [[ -n "$logs" ]]; then
+                local total_lines
+                total_lines=$(echo "$logs" | wc -l)
+                if [[ $total_lines -gt $prev_lines ]]; then
+                    echo "$logs" | tail -n +$((prev_lines + 1))
+                    prev_lines=$total_lines
+                fi
+            fi
+            local state
+            state=$(curl -sf "${API}/builds/${build_id}" 2>/dev/null | jq -r '.progress.state' 2>/dev/null || echo "UNKNOWN")
+            case "$state" in
+                SUCCESS) echo -e "\n${GREEN}Build completed successfully${NC}"; break ;;
+                FAILURE|ERROR|TIMED_OUT) echo -e "\n${RED}Build failed: ${state}${NC}"; break ;;
+            esac
+            sleep 2
+        done
+    else
+        api_get "${API}/builds/${build_id}/logs${tail_param}"
+    fi
+}
+
+download_artifact() {
+    local build_id="${1:?Usage: ap-build download <build_id>}"; shift
+    local output=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --output|-o) output="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    [[ -z "$output" ]] && output="${build_id}.tar.gz"
+
+    info "Downloading artifact to ${output}..."
+    curl -s -f "${API}/builds/${build_id}/artifact" -o "$output" || err "Artifact not available for build ${build_id}"
+    success "Downloaded: ${output}"
+}
+
+# ============================================================
+# TEST COMMANDS
+# ============================================================
+
+test_submit() {
+    local vehicle=""
+    local -a test_targets=()
+    local remote="origin" ref="master"
+    local waf_configure="" waf_build=""
+
+    [[ $# -ge 1 ]] && vehicle="$1" && shift
+
+    # Collect test targets (all positional args before flags)
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --remote) remote="$2"; shift 2 ;;
+            --ref) ref="$2"; shift 2 ;;
+            --waf-configure) waf_configure="$2"; shift 2 ;;
+            --waf-build) waf_build="$2"; shift 2 ;;
+            -*) err "Unknown flag: $1" ;;
+            *) test_targets+=("$1"); shift ;;
+        esac
+    done
+
+    [[ -z "$vehicle" || ${#test_targets[@]} -eq 0 ]] && \
+        err "Usage: ap-build test submit <vehicle> <test1> [test2 ...] [--remote X] [--ref X] [--waf-configure \"flags\"] [--waf-build \"flags\"]"
+
+    # Build waf args arrays
+    local configure_args="[]"
+    local build_args="[]"
+    if [[ -n "$waf_configure" ]]; then
+        configure_args=$(echo "$waf_configure" | jq -R 'split(" ") | map(select(. != ""))')
+    fi
+    if [[ -n "$waf_build" ]]; then
+        build_args=$(echo "$waf_build" | jq -R 'split(" ") | map(select(. != ""))')
+    fi
+
+    info "Submitting ${#test_targets[@]} test(s) for ${vehicle} @ ${remote}/${ref}"
+    [[ -n "$waf_configure" ]] && info "  waf configure: ${waf_configure}"
+    [[ -n "$waf_build" ]] && info "  waf build: ${waf_build}"
+
+    local -a submitted_ids=()
+    for test_target in "${test_targets[@]}"; do
+        local payload
+        payload=$(jq -n \
+            --arg v "$vehicle" \
+            --arg t "$test_target" \
+            --arg r "$remote" \
+            --arg ref "$ref" \
+            --argjson wc "$configure_args" \
+            --argjson wb "$build_args" \
+            '{vehicle: $v, test: $t, remote: $r, ref: $ref, waf_configure_args: $wc, waf_build_args: $wb}')
+
+        local response
+        response=$(api_post "${AUTOTEST_API}/tests" "$payload")
+
+        local test_id
+        test_id=$(echo "$response" | jq -r '.test_id')
+        submitted_ids+=("$test_id")
+        success "  ${test_target} -> ${test_id}"
+    done
+
+    echo ""
+    echo -e "${BOLD}${#submitted_ids[@]} test(s) submitted${NC}"
+    echo -e "Track progress:"
+    echo -e "  ap-build test list"
+    for tid in "${submitted_ids[@]}"; do
+        echo -e "  ap-build test logs ${tid} --follow"
+    done
+}
+
+test_list() {
+    api_get "${AUTOTEST_API}/tests" | jq -r '
+        .[] | "\(.test_id)\t\(.vehicle)\t\(.test)\t\(.remote)/\(.ref)\t\(.state)"
+    ' | column -t -s $'\t'
+}
+
+test_status() {
+    local test_id="${1:?Usage: ap-build test status <test_id>}"
+    local test_info
+    test_info=$(api_get "${AUTOTEST_API}/tests/${test_id}")
+
+    local state
+    state=$(echo "$test_info" | jq -r '.state')
+    local color="$NC"
+    case "$state" in
+        SUCCESS) color="$GREEN" ;;
+        FAILURE|ERROR) color="$RED" ;;
+        BUILDING|TESTING|UPDATING) color="$CYAN" ;;
+        PENDING) color="$YELLOW" ;;
+        CANCELLED) color="$YELLOW" ;;
+    esac
+
+    echo -e "${BOLD}Test ${test_id}${NC}"
+    echo -e "  Vehicle:   $(echo "$test_info" | jq -r '.vehicle')"
+    echo -e "  Test:      $(echo "$test_info" | jq -r '.test')"
+    echo -e "  Remote:    $(echo "$test_info" | jq -r '.remote')"
+    echo -e "  Ref:       $(echo "$test_info" | jq -r '.ref')"
+    echo -e "  State:     ${color}${state}${NC}"
+
+    local waf_cfg
+    waf_cfg=$(echo "$test_info" | jq -r '.waf_configure_args | join(" ")')
+    local waf_bld
+    waf_bld=$(echo "$test_info" | jq -r '.waf_build_args | join(" ")')
+    [[ -n "$waf_cfg" ]] && echo -e "  Waf Cfg:   ${waf_cfg}"
+    [[ -n "$waf_bld" ]] && echo -e "  Waf Build: ${waf_bld}"
+}
+
+test_logs() {
+    local test_id="${1:?Usage: ap-build test logs <test_id>}"; shift
+    local tail_n="" follow=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --tail) tail_n="$2"; shift 2 ;;
+            --follow) follow=true; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    local tail_param=""
+    [[ -n "$tail_n" ]] && tail_param="?tail=${tail_n}"
+
+    if [[ "$follow" == true ]]; then
+        local prev_lines=0
+        while true; do
+            local logs
+            logs=$(curl -sf "${AUTOTEST_API}/tests/${test_id}/logs" 2>/dev/null || echo "")
+            if [[ -n "$logs" ]]; then
+                local total_lines
+                total_lines=$(echo "$logs" | wc -l)
+                if [[ $total_lines -gt $prev_lines ]]; then
+                    echo "$logs" | tail -n +$((prev_lines + 1))
+                    prev_lines=$total_lines
+                fi
+            fi
+            local state
+            state=$(curl -sf "${AUTOTEST_API}/tests/${test_id}" 2>/dev/null | jq -r '.state' 2>/dev/null || echo "UNKNOWN")
+            case "$state" in
+                SUCCESS) echo -e "\n${GREEN}Tests passed!${NC}"; break ;;
+                FAILURE|ERROR) echo -e "\n${RED}Tests failed: ${state}${NC}"; break ;;
+                CANCELLED) echo -e "\n${YELLOW}Test cancelled${NC}"; break ;;
+            esac
+            sleep 2
+        done
+    else
+        api_get "${AUTOTEST_API}/tests/${test_id}/logs${tail_param}"
+    fi
+}
+
+test_cancel() {
+    local test_id="${1:?Usage: ap-build test cancel <test_id>}"
+    api_post "${AUTOTEST_API}/tests/${test_id}/cancel" "{}" > /dev/null
+    success "Test ${test_id} cancelled"
+}
+
+# ============================================================
+# GIT COMMANDS
+# ============================================================
+
+git_remotes() {
+    api_get "${AUTOTEST_API}/git/remotes" | jq -r '.remotes | to_entries[] | "\(.key)\t\(.value)"' | column -t -s $'\t'
+}
+
+git_branches() {
+    local remote="origin"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --remote) remote="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    api_get "${AUTOTEST_API}/git/branches?remote=${remote}" | jq -r '.branches[]'
+}
+
+git_tags() {
+    local remote=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --remote) remote="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    local url="${AUTOTEST_API}/git/tags"
+    [[ -n "$remote" ]] && url="${url}?remote=${remote}"
+    api_get "$url" | jq -r '.tags[]'
+}
+
+git_add_remote() {
+    local name="${1:?Usage: ap-build git add-remote <name> <url>}"
+    local url="${2:?Usage: ap-build git add-remote <name> <url>}"
+
+    local payload
+    payload=$(jq -n --arg n "$name" --arg u "$url" '{name: $n, url: $u}')
+    local response
+    response=$(api_post "${AUTOTEST_API}/git/add-remote" "$payload")
+
+    echo "$response" | jq -r '.output'
+    success "Remote added"
+}
+
+git_update() {
+    local remote="origin" ref="master" remote_url=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --remote) remote="$2"; shift 2 ;;
+            --remote-name) remote="$2"; shift 2 ;;
+            --remote-url) remote_url="$2"; shift 2 ;;
+            --ref) ref="$2"; shift 2 ;;
+            *) err "Unknown flag: $1" ;;
+        esac
+    done
+
+    info "Updating: ${remote}/${ref}..."
+
+    local payload
+    payload=$(jq -n \
+        --arg r "$remote" \
+        --arg ref "$ref" \
+        --arg url "$remote_url" \
+        '{remote_name: $r, ref: $ref} + (if $url != "" then {remote_url: $url} else {} end)')
+
+    local response
+    response=$(api_post "${AUTOTEST_API}/git/update" "$payload")
+
+    echo "$response" | jq -r '.output'
+    success "Update complete"
+}
+
+# ============================================================
+# MAIN
+# ============================================================
+
+[[ $# -eq 0 ]] && usage
+
+cmd="$1"; shift
+
+case "$cmd" in
+    list)
+        subcmd="${1:?Usage: ap-build list <vehicles|versions|boards|features|builds>}"; shift
+        case "$subcmd" in
+            vehicles) list_vehicles ;;
+            versions) list_versions "$@" ;;
+            boards)   list_boards "$@" ;;
+            features) list_features "$@" ;;
+            builds)   list_builds "$@" ;;
+            *) err "Unknown list target: $subcmd" ;;
+        esac
+        ;;
+    submit)   submit_build "$@" ;;
+    status)   show_build_status "$@" ;;
+    logs)     show_build_logs "$@" ;;
+    download) download_artifact "$@" ;;
+    test)
+        subcmd="${1:?Usage: ap-build test <submit|list|status|logs|cancel>}"; shift
+        case "$subcmd" in
+            submit) test_submit "$@" ;;
+            list)   test_list ;;
+            status) test_status "$@" ;;
+            logs)   test_logs "$@" ;;
+            cancel) test_cancel "$@" ;;
+            *) err "Unknown test command: $subcmd" ;;
+        esac
+        ;;
+    git)
+        subcmd="${1:?Usage: ap-build git <remotes|branches|tags|add-remote|update>}"; shift
+        case "$subcmd" in
+            remotes)    git_remotes ;;
+            branches)   git_branches "$@" ;;
+            tags)       git_tags "$@" ;;
+            add-remote) git_add_remote "$@" ;;
+            update)     git_update "$@" ;;
+            *) err "Unknown git command: $subcmd" ;;
+        esac
+        ;;
+    help|-h|--help) usage ;;
+    *) err "Unknown command: $cmd. Run 'ap-build help' for usage." ;;
+esac

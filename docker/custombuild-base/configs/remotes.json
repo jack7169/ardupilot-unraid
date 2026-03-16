@@ -1,0 +1,59 @@
+[
+  {
+    "name": "ardupilot",
+    "url": "https://github.com/ArduPilot/ardupilot.git",
+    "vehicles": [
+      {
+        "name": "Plane",
+        "releases": [
+          {
+            "release_type": "stable",
+            "version_number": "4.6.3",
+            "commit_reference": "refs/tags/ArduPlane-4.6.3"
+          }
+        ]
+      },
+      {
+        "name": "Copter",
+        "releases": [
+          {
+            "release_type": "stable",
+            "version_number": "4.6.0",
+            "commit_reference": "refs/tags/ArduCopter-4.6.0"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "jack7169",
+    "url": "https://github.com/jack7169/ardupilot-jack.git",
+    "vehicles": [
+      {
+        "name": "Copter",
+        "releases": [
+          {
+            "release_type": "Custom",
+            "version_number": "extpos-kalman-fusion",
+            "commit_reference": "refs/heads/feature/extpos-kalman-fusion"
+          },
+          {
+            "release_type": "Custom",
+            "version_number": "ekf3-external-position",
+            "commit_reference": "refs/heads/feature/ekf3-external-position-improvements"
+          },
+          {
+            "release_type": "Custom",
+            "version_number": "gps-denied-extpos-fallback",
+            "commit_reference": "refs/heads/feature/gps-denied-extpos-fallback"
+          },
+          {
+            "release_type": "Custom",
+            "version_number": "per-instance-gps-disable",
+            "commit_reference": "refs/heads/feature/per-instance-gps-disable"
+          }
+        ]
+      }
+    ]
+  }
+]
