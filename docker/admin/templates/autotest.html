@@ -136,12 +136,14 @@
                                 <th>Vehicle</th>
                                 <th>Test Target</th>
                                 <th>Remote / Ref</th>
+                                <th>Started</th>
+                                <th>Duration</th>
                                 <th>State</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody id="tests-body">
-                            <tr><td colspan="6" class="text-center text-muted py-3">Loading...</td></tr>
+                            <tr><td colspan="8" class="text-center text-muted py-3">Loading...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -264,12 +266,25 @@
             }
         }
 
+        function fmtTime(ts) {
+            if (!ts) return '-';
+            return new Date(ts * 1000).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit'});
+        }
+
+        function fmtDuration(start, end) {
+            if (!start) return '-';
+            const elapsed = (end || Date.now()/1000) - start;
+            if (elapsed < 60) return `${Math.round(elapsed)}s`;
+            if (elapsed < 3600) return `${Math.floor(elapsed/60)}m ${Math.round(elapsed%60)}s`;
+            return `${Math.floor(elapsed/3600)}h ${Math.floor((elapsed%3600)/60)}m`;
+        }
+
         function renderTests(tests) {
             const tbody = document.getElementById('tests-body');
             document.getElementById('test-count').textContent = `${tests.length} test(s)`;
 
             if (tests.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">No tests yet. Submit one above.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">No tests yet. Submit one above.</td></tr>';
                 return;
             }
 
@@ -280,6 +295,8 @@
                     <td>${esc(t.vehicle)}</td>
                     <td><code class="small">${esc(t.test)}</code></td>
                     <td>${esc(t.remote)}/<strong>${esc(t.ref)}</strong></td>
+                    <td class="small text-muted">${fmtTime(t.created_at)}</td>
+                    <td class="small text-muted">${fmtDuration(t.created_at, t.finished_at)}</td>
                     <td><span class="badge state-badge state-${t.state}">${t.state}</span></td>
                     <td>
                         <button class="btn btn-sm btn-outline-primary me-1" onclick="showLogs('${esc(t.test_id)}')">

@@ -29,9 +29,12 @@ BUILDLOGS_DIR = Path(os.environ.get("BUILDLOGS_DIR", "/buildlogs"))
 # Serialize git operations — concurrent submodule updates deadlock on shared .git
 git_lock = asyncio.Lock()
 
-# Serialize SITL test execution — SITL binds to fixed ports (5760 etc)
-# Tests queue here after build completes, run one at a time
-sitl_lock = asyncio.Lock()
+# SITL instance pool — each instance gets unique ports via -I N (port + N*10)
+# This allows concurrent SITL execution without port conflicts
+MAX_SITL_INSTANCES = 10
+sitl_instance_pool = asyncio.Queue()
+for _i in range(MAX_SITL_INSTANCES):
+    sitl_instance_pool.put_nowait(_i)
 
 tests: dict[str, dict] = {}
 
@@ -585,24 +588,41 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
         test_info["log"] += f"Copy ready: {wt_path}\n\n"
         flush_log(test_info)
 
-        # SITL binds to fixed ports — serialize test execution
+        # Grab a SITL instance slot (each uses unique ports: base + instance*10)
         test_info["state"] = "QUEUED"
-        test_info["log"] += f"\n=== Waiting for SITL slot ===\n"
+        test_info["log"] += f"\n=== Waiting for SITL instance ({sitl_instance_pool.qsize()}/{MAX_SITL_INSTANCES} free) ===\n"
         flush_log(test_info)
 
-        async with sitl_lock:
+        instance_num = await sitl_instance_pool.get()
+        try:
             test_info["state"] = "TESTING"
+            test_info["log"] += f"=== SITL instance {instance_num} (ports {5760 + instance_num*10}+) ===\n"
             test_info["log"] += f"=== Running: {test_target} ===\n"
             test_info["log"] += f"=== BUILDLOGS: {test_buildlogs} ===\n"
             test_info["log"] += "=" * 60 + "\n"
             flush_log(test_info)
+
+            # Wrap SITL binaries to inject -I <instance> for port isolation
+            # Create shims in a temp bin dir that sits first on PATH
+            shim_dir = wt_path / "_sitl_shims"
+            shim_dir.mkdir(exist_ok=True)
+            for binary_name in ["arduplane", "arducopter", "ardurover",
+                                "ardusub", "antennatracker", "blimp"]:
+                shim = shim_dir / binary_name
+                real_binary = wt_path / "build" / "sitl" / "bin" / binary_name
+                shim.write_text(
+                    f"#!/bin/bash\nexec {real_binary} -I {instance_num} \"$@\"\n"
+                )
+                shim.chmod(0o755)
+
+            run_env = {**test_env, "PATH": f"{shim_dir}:{test_env.get('PATH', '')}"}
 
             proc = await asyncio.create_subprocess_exec(
                 "python3", "Tools/autotest/autotest.py", test_target,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=wt_path,
-                env=test_env,
+                env=run_env,
             )
             test_info["process"] = proc
 
@@ -618,6 +638,9 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
 
             await proc.wait()
             test_info["process"] = None
+        finally:
+            # Return instance slot to pool
+            sitl_instance_pool.put_nowait(instance_num)
 
         if proc.returncode == 0:
             test_info["state"] = "SUCCESS"
@@ -730,7 +753,7 @@ async def api_status():
 
 
 @app.get("/autotest/api/tests")
-async def list_tests(limit: int = 20):
+async def list_tests(limit: int = 100):
     sorted_tests = sorted(
         tests.values(), key=lambda t: t["created_at"], reverse=True
     )
