@@ -1,0 +1,40 @@
+version: "3.8"
+
+services:
+  # --- Bundled ArduPilot server (all services in one container) ---
+  ardupilot:
+    build:
+      context: ../..
+      dockerfile: docker/bundled/Dockerfile
+    container_name: ardupilot-bundled
+    restart: always
+    cap_add:
+      - SYS_ADMIN
+    ports:
+      - "8000:8000"
+    environment:
+      CBS_LOG_LEVEL: ${CBS_LOG_LEVEL:-INFO}
+      CBS_BUILD_TIMEOUT_SEC: ${CBS_BUILD_TIMEOUT_SEC:-900}
+      CBS_REMOTES_RELOAD_TOKEN: ${CBS_REMOTES_RELOAD_TOKEN:-}
+    volumes:
+      - ardupilot-data:/data:rw
+
+  # --- Cloudflare Tunnel: public ingress (optional sidecar) ---
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: ardupilot-cloudflared
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    network_mode: "service:ardupilot"
+    depends_on:
+      - ardupilot
+
+volumes:
+  ardupilot-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR:-/mnt/user/appdata/ardupilot/bundled-data}

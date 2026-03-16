@@ -1,0 +1,5 @@
+# Exclude large ArduPilot source submodule from Docker build context
+ardupilot-jack/
+.git/
+.claude/
+*.diff

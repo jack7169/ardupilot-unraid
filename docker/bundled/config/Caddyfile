@@ -1,0 +1,59 @@
+:8000 {
+    # Status page
+    handle /status {
+        reverse_proxy 127.0.0.1:8090
+    }
+    handle /status/* {
+        reverse_proxy 127.0.0.1:8090
+    }
+
+    # Documentation page
+    handle /docs {
+        reverse_proxy 127.0.0.1:8090
+    }
+    handle /docs/* {
+        reverse_proxy 127.0.0.1:8090
+    }
+
+    # Autotest UI (served by admin)
+    handle /autotest {
+        reverse_proxy 127.0.0.1:8090
+    }
+    # Autotest API (served by autotest service)
+    handle /autotest/* {
+        reverse_proxy 127.0.0.1:8091
+    }
+
+    # Admin UI for managing remotes
+    handle /admin {
+        reverse_proxy 127.0.0.1:8090
+    }
+    handle /admin/* {
+        reverse_proxy 127.0.0.1:8090
+    }
+
+    # Results: static assets (css, images, logs, tlogs) served directly
+    handle /results/_static/* {
+        uri strip_prefix /results/_static
+        root * /data/buildlogs
+        file_server
+    }
+
+    # Results: HTML pages through admin service (navbar wrapper)
+    handle /results {
+        reverse_proxy 127.0.0.1:8090
+    }
+    handle /results/* {
+        reverse_proxy 127.0.0.1:8090
+    }
+
+    # API capabilities discovery (for AI agents)
+    handle /api/capabilities {
+        reverse_proxy 127.0.0.1:8090
+    }
+
+    # Default: CustomBuild frontend
+    handle {
+        reverse_proxy 127.0.0.1:8080
+    }
+}

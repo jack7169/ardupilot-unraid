@@ -1,0 +1,26 @@
+# ArduPilot Bundled Server Configuration
+# All services read from this file. Environment variables override these values.
+
+redis:
+  host: 127.0.0.1
+  port: 6379
+
+custombuild:
+  base_dir: /data/custombuild-base
+  log_level: INFO
+  build_timeout_sec: 900
+  remotes_reload_token: ""
+
+autotest:
+  workdir: /data/autotest-workdir
+  results_dir: /data/autotest-results
+  buildlogs_dir: /data/buildlogs
+  max_sitl_instances: 10
+
+admin:
+  base_dir: /data/custombuild-base
+  buildlogs_dir: /data/buildlogs
+  custombuild_url: http://127.0.0.1:8080
+
+server:
+  listen_port: 8000
