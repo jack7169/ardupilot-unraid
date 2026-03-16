@@ -99,6 +99,13 @@ COPY --chown=ardupilot:ardupilot docker/autotest/app.py /app/autotest/
 # Allow ardupilot user to run mount/umount for overlay fs (autotest worktrees)
 RUN echo 'ardupilot ALL=(root) NOPASSWD: /bin/mount, /bin/umount' > /etc/sudoers.d/ardupilot-overlay
 
+# Mark data dirs as safe for git (ownership may differ between host and container)
+RUN git config --global --add safe.directory /data/autotest-workdir/ardupilot && \
+    git config --global --add safe.directory /data/custombuild-base/ardupilot && \
+    git config --global --add safe.directory /workdir/ardupilot
+# Copy global gitconfig to ardupilot user too
+RUN cp /root/.gitconfig /home/ardupilot/.gitconfig && chown ardupilot:ardupilot /home/ardupilot/.gitconfig
+
 # Set ownership on data directories
 RUN chown -R ardupilot:ardupilot /data /app /workdir /var/log/supervisor
 
