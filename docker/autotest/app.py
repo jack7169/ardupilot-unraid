@@ -119,31 +119,34 @@ async def startup():
                 shutil.rmtree(item, ignore_errors=True)
                 logger.info(f"Cleaned up test copy: {item.name}")
 
-    # 3. Clean up build templates (plain dirs copied from source templates)
+    # 3. Reload build templates from disk into cache
     if BUILD_TEMPLATES_DIR.exists():
         for item in BUILD_TEMPLATES_DIR.iterdir():
-            if item.is_dir():
-                shutil.rmtree(item, ignore_errors=True)
-                logger.info(f"Cleaned up build template: {item.name}")
+            if item.is_dir() and item.name.startswith("bld-"):
+                # Dir name: bld-<16char_key>-<vehicle>
+                # Extract key: everything between first and last hyphen-segment
+                parts = item.name.split("-")
+                # parts = ["bld", "<key>", "<vehicle>"] but key may be 8 or 16 chars
+                key = parts[1] if len(parts) >= 3 else item.name
+                build_cache[key] = {"path": item, "last_used": time.time()}
+                logger.info(f"Restored build template: {item.name} (key={key})")
+        logger.info(f"Restored {len(build_cache)} build template(s) from disk")
 
-    # 4. Clean up source template worktrees (these are real git worktrees)
-    if not (ARDUPILOT_DIR / "waf").exists():
-        return
-    if TEMPLATES_DIR.exists():
+    # 4. Reload source templates into cache
+    if (ARDUPILOT_DIR / "waf").exists() and TEMPLATES_DIR.exists():
         for tpl in TEMPLATES_DIR.iterdir():
-            if tpl.is_dir():
-                await run_cmd(
-                    ["git", "worktree", "unlock", str(tpl)],
+            if tpl.is_dir() and tpl.name.startswith("tpl-"):
+                commit_prefix = tpl.name.removeprefix("tpl-")
+                # Find full commit SHA
+                rc, out = await run_cmd(
+                    ["git", "rev-parse", commit_prefix],
                     cwd=ARDUPILOT_DIR, timeout=10,
                 )
-                rc, _ = await run_cmd(
-                    ["git", "worktree", "remove", "--force", str(tpl)],
-                    cwd=ARDUPILOT_DIR, timeout=30,
-                )
-                if rc != 0:
-                    shutil.rmtree(tpl, ignore_errors=True)
-                logger.info(f"Cleaned up source template: {tpl.name}")
-    await run_cmd(["git", "worktree", "prune"], cwd=ARDUPILOT_DIR)
+                commit = out.strip() if rc == 0 else commit_prefix
+                template_cache[commit] = {"path": tpl, "last_used": time.time()}
+                logger.info(f"Restored source template: {tpl.name} -> {commit[:12]}")
+        logger.info(f"Restored {len(template_cache)} source template(s) from disk")
+        await run_cmd(["git", "worktree", "prune"], cwd=ARDUPILOT_DIR)
     logger.info("Startup cleanup complete")
 
 
@@ -419,7 +422,7 @@ async def get_or_create_build_template(
         logger.info(f"Evicted build template {oldest_key[:8]}")
 
     # Copy source template to build template dir
-    bld_path = BUILD_TEMPLATES_DIR / f"bld-{key[:8]}-{vehicle.lower()}"
+    bld_path = BUILD_TEMPLATES_DIR / f"bld-{key}-{vehicle.lower()}"
     if bld_path.exists():
         shutil.rmtree(bld_path, ignore_errors=True)
 
