@@ -2,6 +2,10 @@ FROM ardupilot/ardupilot-dev-chibios:v0.1.5
 
 USER root
 
+# Create ardupilot user before package installs (redis-server claims GID 999 otherwise)
+RUN groupadd -g 999 ardupilot && \
+    useradd -u 999 -g 999 -m ardupilot --shell /bin/bash
+
 # Install system dependencies (redis, supervisor, process tools, SITL X11 deps)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
@@ -53,10 +57,6 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     wsproto \
     tabulate \
     pyyaml
-
-# Create ardupilot user (matching existing services)
-RUN groupadd -g 999 ardupilot 2>/dev/null || true && \
-    useradd -u 999 -g 999 -m ardupilot --shell /bin/bash 2>/dev/null || true
 
 # Create application directories
 RUN mkdir -p \
