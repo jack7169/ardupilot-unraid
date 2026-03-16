@@ -33,7 +33,7 @@ git_lock = asyncio.Lock()
 
 # SITL instance pool — each instance gets unique ports via -I N (port + N*10)
 # This allows concurrent SITL execution without port conflicts
-MAX_SITL_INSTANCES = 10
+MAX_SITL_INSTANCES = 50
 sitl_instance_pool = asyncio.Queue()
 for _i in range(MAX_SITL_INSTANCES):
     sitl_instance_pool.put_nowait(_i)
