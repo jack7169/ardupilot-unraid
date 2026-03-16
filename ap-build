@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-BASE_URL="${AP_BUILD_URL:-http://carthagenas.local:8000}"
+BASE_URL="${AP_BUILD_URL:-http://192.168.50.45:8000}"
 API="${BASE_URL}/api/v1"
 AUTOTEST_API="${BASE_URL}/autotest/api"
 
@@ -90,7 +90,7 @@ GIT (autotest repo):
     --ref <branch|tag|sha>   Ref to checkout (default: master)
 
 ENVIRONMENT:
-  AP_BUILD_URL   Base URL (default: http://carthagenas.local:8000)
+  AP_BUILD_URL   Base URL (default: http://192.168.50.45:8000)
 
 EXAMPLES:
   ap-build list versions plane
