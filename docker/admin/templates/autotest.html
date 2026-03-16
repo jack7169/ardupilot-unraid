@@ -230,6 +230,7 @@
     <script>
         const API = '/autotest/api';
         let logPollInterval = null;
+        let remoteUrls = {};  // name -> git URL mapping for building GitHub links
 
         function esc(s) {
             if (!s) return '';
@@ -294,7 +295,7 @@
                     <td><code class="small">${esc(t.test_id)}</code></td>
                     <td>${esc(t.vehicle)}</td>
                     <td><code class="small">${esc(t.test)}</code></td>
-                    <td>${esc(t.remote)}/<strong>${esc(t.ref)}</strong></td>
+                    <td>${remoteRefLink(t.remote, t.ref)}</td>
                     <td class="small text-muted">${fmtTime(t.created_at)}</td>
                     <td class="small text-muted">${fmtDuration(t.created_at, t.finished_at)}</td>
                     <td><span class="badge state-badge state-${t.state}">${t.state}</span></td>
@@ -308,6 +309,20 @@
                     </td>
                 </tr>`;
             }).join('');
+        }
+
+        // --- GitHub links ---
+        function remoteToGithubUrl(remoteName) {
+            const gitUrl = remoteUrls[remoteName] || '';
+            return gitUrl.replace(/\.git$/, '');
+        }
+
+        function remoteRefLink(remoteName, ref) {
+            const ghUrl = remoteToGithubUrl(remoteName);
+            if (ghUrl && ghUrl.includes('github.com')) {
+                return `<a href="${esc(ghUrl)}/tree/${esc(ref)}" target="_blank" class="text-decoration-none">${esc(remoteName)}/<strong>${esc(ref)}</strong></a>`;
+            }
+            return `${esc(remoteName)}/<strong>${esc(ref)}</strong>`;
         }
 
         // --- Subtest picker ---
@@ -364,14 +379,15 @@
             try {
                 const resp = await fetch(`${API}/git/remotes`);
                 const data = await resp.json();
+                remoteUrls = data.remotes || {};
                 const sel = document.getElementById('testRemote');
-                const remotes = Object.keys(data.remotes || {});
+                const remotes = Object.keys(remoteUrls);
                 if (remotes.length === 0) {
                     sel.innerHTML = '<option value="origin">origin</option>';
                     return;
                 }
                 sel.innerHTML = remotes.map(r =>
-                    `<option value="${esc(r)}">${esc(r)}</option>`
+                    `<option value="${esc(r)}" ${r === 'jack7169' ? 'selected' : ''}>${esc(r)}</option>`
                 ).join('');
             } catch (e) {
                 document.getElementById('testRemote').innerHTML = '<option value="origin">origin</option>';
@@ -499,10 +515,12 @@
                     container.innerHTML = '<span class="text-muted small">No remotes (repo not cloned yet)</span>';
                     return;
                 }
-                container.innerHTML = entries.map(([name, url]) =>
-                    `<span class="badge bg-secondary me-1 mb-1">${esc(name)}</span>
-                     <span class="text-muted small me-3">${esc(url)}</span>`
-                ).join('<br>');
+                container.innerHTML = entries.map(([name, url]) => {
+                    const ghUrl = url.replace(/\.git$/, '');
+                    const isGh = ghUrl.includes('github.com');
+                    return `<span class="badge bg-secondary me-1 mb-1">${esc(name)}</span>
+                     ${isGh ? `<a href="${esc(ghUrl)}" target="_blank" class="small me-3"><i class="bi bi-github me-1"></i>${esc(url)}</a>` : `<span class="text-muted small me-3">${esc(url)}</span>`}`;
+                }).join('<br>');
             } catch (e) {
                 document.getElementById('git-remotes').innerHTML = '<span class="text-danger small">Failed to load</span>';
             }
