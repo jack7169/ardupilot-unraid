@@ -181,7 +181,7 @@
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button class="btn btn-primary" onclick="submitCopyReleases()"><i class="bi bi-copy me-1"></i>Copy</button>
+                    <button class="btn btn-primary" onclick="submitCopyReleases()"><i class="bi bi-clipboard me-1"></i>Copy</button>
                 </div>
             </div>
         </div>
@@ -295,7 +295,7 @@
                                     <strong><i class="bi bi-airplane me-2"></i>${esc(vehicle.name)}</strong>
                                     <div>
                                         <button class="btn btn-sm btn-outline-secondary me-1" onclick="showCopyVehicle('${esc(remote.name)}', '${esc(vehicle.name)}')">
-                                            <i class="bi bi-copy me-1"></i>Copy All to...
+                                            <i class="bi bi-clipboard me-1"></i>Copy All to...
                                         </button>
                                         <button class="btn btn-sm btn-outline-success me-1" onclick="showAddRelease('${esc(remote.name)}', '${esc(vehicle.name)}')">
                                             <i class="bi bi-plus me-1"></i>Release
@@ -317,7 +317,7 @@
                                                 <td><code>${esc(rel.commit_reference)}</code></td>
                                                 <td>${rel.ap_build_artifacts_url ? `<a href="${esc(rel.ap_build_artifacts_url)}" target="_blank" class="text-truncate d-inline-block" style="max-width:200px">${esc(rel.ap_build_artifacts_url)}</a>` : '<span class="text-muted">-</span>'}</td>
                                                 <td>
-                                                    <button class="btn btn-sm btn-outline-secondary me-1" onclick="showCopyRelease('${esc(remote.name)}', '${esc(vehicle.name)}', ${idx})" title="Copy to..."><i class="bi bi-copy"></i></button>
+                                                    <button class="btn btn-sm btn-outline-secondary me-1" onclick="showCopyRelease('${esc(remote.name)}', '${esc(vehicle.name)}', ${idx})" title="Copy to..."><i class="bi bi-clipboard"></i></button>
                                                     <button class="btn btn-sm btn-outline-primary me-1" onclick="showEditRelease('${esc(remote.name)}', '${esc(vehicle.name)}', ${idx})"><i class="bi bi-pencil"></i></button>
                                                     <button class="btn btn-sm btn-outline-danger" onclick="deleteRelease('${esc(remote.name)}', '${esc(vehicle.name)}', ${idx})"><i class="bi bi-x"></i></button>
                                                 </td>
