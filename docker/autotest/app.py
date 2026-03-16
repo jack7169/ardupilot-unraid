@@ -602,20 +602,21 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
             test_info["log"] += "=" * 60 + "\n"
             flush_log(test_info)
 
-            # Wrap SITL binaries to inject -I <instance> for port isolation
-            # Create shims in a temp bin dir that sits first on PATH
-            shim_dir = wt_path / "_sitl_shims"
-            shim_dir.mkdir(exist_ok=True)
-            for binary_name in ["arduplane", "arducopter", "ardurover",
-                                "ardusub", "antennatracker", "blimp"]:
-                shim = shim_dir / binary_name
-                real_binary = wt_path / "build" / "sitl" / "bin" / binary_name
-                shim.write_text(
-                    f"#!/bin/bash\nexec {real_binary} -I {instance_num} \"$@\"\n"
-                )
-                shim.chmod(0o755)
+            # Replace SITL binaries in-place with shims that inject -I <instance>
+            # Autotest calls the binary by full path, so PATH shims don't work
+            bin_dir = wt_path / "build" / "sitl" / "bin"
+            if bin_dir.exists():
+                for binary in bin_dir.iterdir():
+                    if binary.is_file() and binary.stat().st_mode & 0o111:
+                        real = binary.with_suffix(".real")
+                        if not real.exists():
+                            binary.rename(real)
+                            binary.write_text(
+                                f"#!/bin/bash\nexec {real} -I {instance_num} \"$@\"\n"
+                            )
+                            binary.chmod(0o755)
 
-            run_env = {**test_env, "PATH": f"{shim_dir}:{test_env.get('PATH', '')}"}
+            run_env = test_env
 
             proc = await asyncio.create_subprocess_exec(
                 "python3", "Tools/autotest/autotest.py", test_target,
