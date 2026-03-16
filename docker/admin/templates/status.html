@@ -49,6 +49,10 @@
         .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #e5e7eb; border-top-color: #6b7280; border-radius: 50%; animation: spin 0.6s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
     </style>
+    <style>
+        @keyframes metrics-pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+        .metrics-pulse { animation: metrics-pulse 1.2s ease-in-out infinite; }
+    </style>
 </head>
 <body class="bg-light">
     <nav class="navbar bg-dark">
@@ -57,6 +61,12 @@
                 <img src="/static/images/ardupilot_logo.png" alt="ArduPilot" height="24" class="d-inline-block align-text-top">
                 <span class="ms-2 text-white" style="font-size: 25px;">carthagenas</span>
             </a>
+            <div id="sys-metrics" class="d-flex align-items-center gap-3 text-white" style="font-size: 13px; opacity: 0.85;">
+                <span id="metrics-icon"><i class="bi bi-snow text-info" style="font-size:16px"></i></span>
+                <span>CPU <span id="cpu-pct">--</span>%</span>
+                <span>MEM <span id="mem-pct">--</span>%</span>
+                <span><i class="bi bi-play-circle me-1"></i><span id="running-count">-</span> running</span>
+            </div>
             <div>
                 <a href="/" class="btn btn-outline-light me-1"><i class="bi bi-hammer me-2"></i>Builder</a>
                 <a href="/admin" class="btn btn-outline-light me-1"><i class="bi bi-gear me-2"></i>Admin</a>
@@ -145,5 +155,6 @@
         fetchStatus();
         setInterval(fetchStatus, 30000);
     </script>
+    <script src="/admin/static/js/metrics.js"></script>
 </body>
 </html>

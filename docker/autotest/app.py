@@ -11,6 +11,8 @@ import time
 import uuid
 from pathlib import Path
 
+import psutil
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
@@ -110,6 +112,9 @@ def load_persisted_tests():
 @app.on_event("startup")
 async def startup():
     """Load persisted tests and clean up orphaned worktrees."""
+    # 0. Prime psutil CPU counter (first call with interval=0 always returns 0)
+    psutil.cpu_percent(interval=None)
+
     # 1. Reload test history from disk
     load_persisted_tests()
 
@@ -810,6 +815,24 @@ async def api_status():
         "running_count": len(running),
         "total_tests": len(tests),
         "repo_exists": (ARDUPILOT_DIR / "waf").exists(),
+    }
+
+
+@app.get("/autotest/api/metrics")
+async def api_metrics():
+    running_states = ("UPDATING", "BUILDING", "TESTING", "QUEUED")
+    running = [t for t in tests.values() if t["state"] in running_states]
+    pending = [t for t in tests.values() if t["state"] == "QUEUED"]
+    mem = psutil.virtual_memory()
+    load_1m = os.getloadavg()[0]
+    return {
+        "cpu_percent": psutil.cpu_percent(interval=0),
+        "memory_percent": mem.percent,
+        "memory_used_gb": round(mem.used / (1024**3), 1),
+        "memory_total_gb": round(mem.total / (1024**3), 1),
+        "running_tests": len(running),
+        "pending_tests": len(pending),
+        "load_avg_1m": round(load_1m, 1),
     }
 
 
