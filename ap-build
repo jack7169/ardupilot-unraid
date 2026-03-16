@@ -65,7 +65,7 @@ TESTS:
   ap-build test submit <vehicle> <test1> [test2 ...]  Submit SITL autotest(s)
     --remote <name>                                     Git remote (default: origin)
     --ref <branch|tag|sha>                              Git ref to test (default: master)
-    --commit <sha>                                      Pin exact commit SHA (overrides --ref)
+    --commit <sha>                                      Pin exact commit SHA (use with --ref)
     --waf-configure "<flags>"                            Extra waf configure flags
     --waf-build "<flags>"                                Extra waf build flags
 
@@ -326,11 +326,6 @@ test_submit() {
     [[ -z "$vehicle" || ${#test_targets[@]} -eq 0 ]] && \
         err "Usage: ap-build test submit <vehicle> <test1> [test2 ...] [--remote X] [--ref X] [--commit <sha>] [--waf-configure \"flags\"] [--waf-build \"flags\"]"
 
-    # --commit pins the exact SHA, overriding --ref to prevent branch drift
-    if [[ -n "$commit" ]]; then
-        ref="$commit"
-    fi
-
     # Generate batch ID for multi-test submissions
     local batch_id=""
     if [[ ${#test_targets[@]} -gt 1 ]]; then
@@ -348,7 +343,7 @@ test_submit() {
     fi
 
     if [[ -n "$commit" ]]; then
-        info "Submitting ${#test_targets[@]} test(s) for ${vehicle} @ ${commit} (pinned)"
+        info "Submitting ${#test_targets[@]} test(s) for ${vehicle} @ ${remote}/${ref} (pinned: ${commit:0:12})"
     else
         info "Submitting ${#test_targets[@]} test(s) for ${vehicle} @ ${remote}/${ref}"
     fi
@@ -364,10 +359,11 @@ test_submit() {
             --arg t "$test_target" \
             --arg r "$remote" \
             --arg ref "$ref" \
+            --arg commit "$commit" \
             --argjson wc "$configure_args" \
             --argjson wb "$build_args" \
             --arg bid "$batch_id" \
-            '{vehicle: $v, test: $t, remote: $r, ref: $ref, waf_configure_args: $wc, waf_build_args: $wb} + (if $bid != "" then {batch_id: $bid} else {} end)')
+            '{vehicle: $v, test: $t, remote: $r, ref: $ref, waf_configure_args: $wc, waf_build_args: $wb} + (if $bid != "" then {batch_id: $bid} else {} end) + (if $commit != "" then {commit: $commit} else {} end)')
 
         local response
         response=$(api_post "${AUTOTEST_API}/tests" "$payload")

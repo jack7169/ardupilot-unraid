@@ -152,11 +152,12 @@ ap-build test submit Plane \
     test.Plane.ExtPosGPSToExtPosTransition \
     --remote jack7169 --ref feature/extpos-kalman-fusion
 
-# Pin an exact commit SHA (prevents branch drift between test submissions)
+# Pin an exact commit SHA (requires --ref for fetching, uses --commit for checkout)
 ap-build test submit Plane \
     test.QuadPlane.GPSDeniedQLoiterExtPos \
     test.QuadPlane.GPSDeniedVTOLTransitionExtPos \
-    --remote jack7169 --commit 423c00fc139f70eb3c7e52808f4dd3e56a1d016a
+    --remote jack7169 --ref feature/extpos-kalman-fusion \
+    --commit 423c00fc139f70eb3c7e52808f4dd3e56a1d016a
 
 # Extra waf flags
 ap-build test submit Plane test.Plane.MainFlight \
@@ -180,7 +181,8 @@ ap-build test submit Plane \
     test.QuadPlane.GPSDeniedQLoiterExtPos \
     test.QuadPlane.GPSDeniedVTOLTransitionExtPos \
     test.QuadPlane.GPSDeniedExtPosDropout \
-    --remote jack7169 --commit 423c00fc139f
+    --remote jack7169 --ref feature/extpos-kalman-fusion \
+    --commit 423c00fc139f
 # Output:
 #   Batch: batch-20260316-041500-a3f2
 #   Track progress:
@@ -227,7 +229,8 @@ ap-build test submit Plane \
     test.QuadPlane.GPSDeniedVTOLTransitionExtPos \
     test.QuadPlane.GPSDeniedExtPosDropout \
     test.Plane.ExtPosGPSToExtPosTransition \
-    --remote jack7169 --commit 423c00fc139f
+    --remote jack7169 --ref feature/extpos-kalman-fusion \
+    --commit 423c00fc139f
 
 # 6. Check batch results
 ap-build batch summary batch-20260316-...

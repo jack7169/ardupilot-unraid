@@ -137,6 +137,9 @@
                 <span><i class="bi bi-list-check me-2"></i><strong>Test Runs</strong></span>
                 <div class="d-flex align-items-center gap-2">
                     <span class="text-muted small" id="test-count"></span>
+                    <button class="btn btn-sm btn-outline-secondary" id="toggleColBtn" onclick="toggleGroupCol()" title="Toggle between Remote/Ref and Batch ID">
+                        <i class="bi bi-arrow-left-right me-1"></i><span id="toggleColLabel">Batch ID</span>
+                    </button>
                     <select class="form-select form-select-sm" id="perPage" style="width: auto;" onchange="currentPage=0; fetchTests();">
                         <option value="20" selected>20 / page</option>
                         <option value="50">50 / page</option>
@@ -153,7 +156,7 @@
                                 <th>Test ID</th>
                                 <th>Vehicle</th>
                                 <th>Test Target</th>
-                                <th>Remote / Ref</th>
+                                <th id="groupColHeader">Remote / Ref</th>
                                 <th>Started</th>
                                 <th>Duration</th>
                                 <th>State</th>
@@ -341,7 +344,18 @@
             return `${Math.floor(elapsed/3600)}h ${Math.floor((elapsed%3600)/60)}m`;
         }
 
+        let showBatchCol = false;
+        let lastTests = [];
+
+        function toggleGroupCol() {
+            showBatchCol = !showBatchCol;
+            document.getElementById('groupColHeader').textContent = showBatchCol ? 'Batch ID' : 'Remote / Ref';
+            document.getElementById('toggleColLabel').textContent = showBatchCol ? 'Remote / Ref' : 'Batch ID';
+            renderTests(lastTests);
+        }
+
         function renderTests(tests) {
+            lastTests = tests;
             const tbody = document.getElementById('tests-body');
             document.getElementById('test-count').textContent = `${tests.length} test(s)`;
 
@@ -352,11 +366,14 @@
 
             tbody.innerHTML = tests.map(t => {
                 const isRunning = ['PENDING', 'UPDATING', 'BUILDING', 'QUEUED', 'TESTING'].includes(t.state);
+                const groupCol = showBatchCol
+                    ? (t.batch_id ? `<code class="small">${esc(t.batch_id)}</code>` : '<span class="text-muted">-</span>')
+                    : remoteRefLink(t.remote, t.ref);
                 return `<tr>
                     <td><code class="small">${esc(t.test_id)}</code></td>
                     <td>${esc(t.vehicle)}</td>
                     <td><code class="small">${esc(t.test)}</code></td>
-                    <td>${remoteRefLink(t.remote, t.ref)}</td>
+                    <td>${groupCol}</td>
                     <td class="small text-muted">${fmtTime(t.created_at)}</td>
                     <td class="small text-muted">${fmtDuration(t.created_at, t.finished_at)}</td>
                     <td><span class="badge state-badge state-${t.state}">${t.state}</span></td>

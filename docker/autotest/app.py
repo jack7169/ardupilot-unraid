@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import time
 import uuid
 from pathlib import Path
@@ -186,6 +187,7 @@ class TestRequest(BaseModel):
     test: str = "test.PlaneTests1b"
     remote: str = "origin"
     ref: str = "master"
+    commit: str | None = None  # Pin exact SHA — fetches ref but checks out this commit
     waf_configure_args: list[str] = []
     waf_build_args: list[str] = []
     batch_id: str | None = None
@@ -392,28 +394,58 @@ async def get_or_create_template(commit: str) -> Path:
     return tpl_path
 
 
-async def fast_copy(src: Path, dest: Path) -> None:
-    """Fast copy using cp -a --reflink=auto (instant on btrfs)."""
+async def overlay_mount(lower: Path, dest: Path) -> Path:
+    """
+    Create an overlayfs mount over a read-only template.
+    Instant regardless of template size — only modified files are written.
+    Returns the mount point (dest).
+    """
+    upper = dest.parent / f".upper_{dest.name}"
+    work = dest.parent / f".work_{dest.name}"
+    upper.mkdir(parents=True, exist_ok=True)
+    work.mkdir(parents=True, exist_ok=True)
+    dest.mkdir(parents=True, exist_ok=True)
+
     rc, out = await run_cmd(
-        ["cp", "-a", "--reflink=auto", str(src), str(dest)],
-        timeout=300,
+        ["sudo", "mount", "-t", "overlay", "overlay",
+         "-o", f"lowerdir={lower},upperdir={upper},workdir={work}",
+         str(dest)],
+        timeout=10,
     )
     if rc != 0:
-        raise RuntimeError(f"Failed to copy {src} -> {dest}: {out}")
-
-
-async def create_test_copy(test_id: str, template_path: Path) -> Path:
-    """Fast copy of a build template for a test run. No git or build ops."""
-    dest = WORKTREES_DIR / test_id
-    await fast_copy(template_path, dest)
+        # Fallback to cp if overlay not available
+        logger.warning(f"Overlay mount failed ({out.strip()}), falling back to cp")
+        shutil.rmtree(upper, ignore_errors=True)
+        shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(dest, ignore_errors=True)
+        rc, out = await run_cmd(
+            ["cp", "-a", "--reflink=auto", str(lower), str(dest)],
+            timeout=300,
+        )
+        if rc != 0:
+            raise RuntimeError(f"Failed to copy {lower} -> {dest}: {out}")
     return dest
 
 
+async def create_test_copy(test_id: str, template_path: Path) -> Path:
+    """Overlay mount from build template — instant, writes only diffs."""
+    dest = WORKTREES_DIR / test_id
+    return await overlay_mount(template_path, dest)
+
+
 def cleanup_test_copy(test_id: str):
-    """Remove a test copy. Just rm -rf, no git worktree ops needed."""
+    """Unmount overlay (if mounted) and remove the test copy."""
     copy_path = WORKTREES_DIR / test_id
-    if copy_path.exists():
-        shutil.rmtree(copy_path, ignore_errors=True)
+    upper = WORKTREES_DIR / f".upper_{test_id}"
+    work = WORKTREES_DIR / f".work_{test_id}"
+
+    # Unmount overlay first (ignore error if it was a plain copy)
+    subprocess.run(["sudo", "umount", str(copy_path)],
+                   capture_output=True, timeout=10)
+
+    for p in (copy_path, upper, work):
+        if p.exists():
+            shutil.rmtree(p, ignore_errors=True)
 
 
 # --- Build cache ---
@@ -552,7 +584,8 @@ def collect_artifacts(test_id: str, wt_path: Path, test_buildlogs: Path):
 async def run_test_async(test_id: str, vehicle: str, test_target: str,
                          remote: str, ref: str,
                          waf_configure_args: list[str],
-                         waf_build_args: list[str]):
+                         waf_build_args: list[str],
+                         commit: str | None = None):
     test_info = tests[test_id]
     test_info["state"] = "UPDATING"
 
@@ -562,8 +595,13 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
     test_buildlogs.mkdir(parents=True, exist_ok=True)
     test_env = {**os.environ, "BUILDLOGS": str(test_buildlogs)}
 
+    pinned_commit = commit  # --commit flag from client (None if not pinned)
+
     try:
-        test_info["log"] = f"=== Preparing source for {remote}/{ref} ===\n"
+        test_info["log"] = f"=== Preparing source for {remote}/{ref}"
+        if pinned_commit:
+            test_info["log"] += f" (pinned: {pinned_commit[:12]})"
+        test_info["log"] += " ===\n"
         flush_log(test_info)
 
         await ensure_repo()
@@ -571,25 +609,31 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
         # All git + template ops under one lock acquisition to avoid redundant fetches
         async with git_lock:
             # Check if ref resolves locally first
-            found, commit = await commit_is_local(ref, remote)
+            found, resolved = await commit_is_local(ref, remote)
 
-            if found and commit and commit in template_cache:
+            if found and resolved and resolved in template_cache:
                 # Fast path: commit local + template cached = zero git API calls
-                test_info["log"] += f"Cache HIT: {commit[:12]} (no fetch needed)\n"
-                template_path = template_cache[commit]["path"]
-                template_cache[commit]["last_used"] = time.time()
+                test_info["log"] += f"Cache HIT: {resolved[:12]} (no fetch needed)\n"
+                template_path = template_cache[resolved]["path"]
+                template_cache[resolved]["last_used"] = time.time()
+                commit = resolved
             else:
                 # Need to fetch from remote
-                if not found or not commit:
+                if not found or not resolved:
                     test_info["log"] += f"Ref not local, fetching {remote}...\n"
                     flush_log(test_info)
                     fetch_out = await fetch_remote(remote, ref=ref)
                     test_info["log"] += fetch_out + "\n"
                 else:
-                    test_info["log"] += f"Ref local ({commit[:12]}) but no template, skipping fetch\n"
+                    test_info["log"] += f"Ref local ({resolved[:12]}) but no template, skipping fetch\n"
 
-                commit = await resolve_ref(remote, ref)
-                test_info["log"] += f"Resolved to: {commit}\n"
+                # Use pinned commit if provided, otherwise resolve from branch
+                if pinned_commit:
+                    commit = pinned_commit
+                    test_info["log"] += f"Using pinned commit: {commit}\n"
+                else:
+                    commit = await resolve_ref(remote, ref)
+                    test_info["log"] += f"Resolved to: {commit}\n"
 
                 # Double-check cache (another test may have created it while we waited)
                 if commit in template_cache and template_cache[commit]["path"].exists():
@@ -775,6 +819,7 @@ def test_summary(t: dict) -> dict:
         "test": t["test"],
         "remote": t["remote"],
         "ref": t["ref"],
+        "commit": t.get("commit"),
         "state": t["state"],
         "waf_configure_args": t.get("waf_configure_args", []),
         "waf_build_args": t.get("waf_build_args", []),
@@ -892,6 +937,7 @@ async def submit_test(req: TestRequest):
         "test": req.test,
         "remote": req.remote,
         "ref": req.ref,
+        "commit": req.commit,
         "waf_configure_args": req.waf_configure_args,
         "waf_build_args": req.waf_build_args,
         "state": "PENDING",
@@ -908,6 +954,7 @@ async def submit_test(req: TestRequest):
         run_test_async(
             test_id, req.vehicle, req.test, req.remote, req.ref,
             req.waf_configure_args, req.waf_build_args,
+            commit=req.commit,
         )
     )
     test_info["task"] = task

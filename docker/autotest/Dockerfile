@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     procps \
     psmisc \
     xterm \
+    sudo \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install --no-cache-dir \
@@ -29,7 +30,8 @@ RUN pip3 install --no-cache-dir \
 RUN groupadd -g 999 ardupilot 2>/dev/null || true && \
     useradd -u 999 -g 999 -m ardupilot --shell /bin/bash 2>/dev/null || true && \
     mkdir -p /app /results /workdir && \
-    chown -R ardupilot:ardupilot /app /results /workdir
+    chown -R ardupilot:ardupilot /app /results /workdir && \
+    echo 'ardupilot ALL=(root) NOPASSWD: /bin/mount, /bin/umount' > /etc/sudoers.d/ardupilot-overlay
 
 COPY --chown=ardupilot:ardupilot app.py /app/app.py
 
