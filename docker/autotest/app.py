@@ -44,13 +44,13 @@ tests: dict[str, dict] = {}
 # Each entry: {"path": Path, "last_used": float}
 template_cache: dict[str, dict] = {}
 TEMPLATES_DIR = WORKDIR / "templates"
-MAX_CACHED_TEMPLATES = 10
+MAX_CACHED_TEMPLATES = 3
 
 # Cache of pre-built templates keyed by (commit, vehicle, waf_configure, waf_build)
 # Each entry: {"path": Path, "last_used": float}
 build_cache: dict[str, dict] = {}
 BUILD_TEMPLATES_DIR = WORKDIR / "build_templates"
-MAX_CACHED_BUILDS = 20
+MAX_CACHED_BUILDS = 3
 build_lock = asyncio.Lock()
 
 
@@ -138,6 +138,14 @@ async def startup():
                 logger.info(f"Restored build template: {item.name} (key={key})")
         logger.info(f"Restored {len(build_cache)} build template(s) from disk")
 
+    # Evict excess build templates down to MAX_CACHED_BUILDS
+    while len(build_cache) > MAX_CACHED_BUILDS:
+        oldest_key = min(build_cache, key=lambda k: build_cache[k]["last_used"])
+        oldest = build_cache.pop(oldest_key)
+        if oldest["path"].exists():
+            shutil.rmtree(oldest["path"], ignore_errors=True)
+        logger.info(f"Startup eviction: build template {oldest_key[:8]}")
+
     # 4. Reload source templates into cache
     if (ARDUPILOT_DIR / "waf").exists() and TEMPLATES_DIR.exists():
         for tpl in TEMPLATES_DIR.iterdir():
@@ -152,6 +160,21 @@ async def startup():
                 template_cache[commit] = {"path": tpl, "last_used": time.time()}
                 logger.info(f"Restored source template: {tpl.name} -> {commit[:12]}")
         logger.info(f"Restored {len(template_cache)} source template(s) from disk")
+
+        # Evict excess source templates down to MAX_CACHED_TEMPLATES
+        while len(template_cache) > MAX_CACHED_TEMPLATES:
+            oldest_key = min(template_cache, key=lambda k: template_cache[k]["last_used"])
+            oldest = template_cache.pop(oldest_key)
+            try:
+                await run_cmd(["git", "worktree", "unlock", str(oldest["path"])], cwd=ARDUPILOT_DIR, timeout=10)
+            except Exception:
+                pass
+            try:
+                await run_cmd(["git", "worktree", "remove", "--force", str(oldest["path"])], cwd=ARDUPILOT_DIR, timeout=30)
+            except Exception:
+                shutil.rmtree(oldest["path"], ignore_errors=True)
+            logger.info(f"Startup eviction: source template {oldest_key[:12]}")
+
         await run_cmd(["git", "worktree", "prune"], cwd=ARDUPILOT_DIR)
     logger.info("Startup cleanup complete")
 
