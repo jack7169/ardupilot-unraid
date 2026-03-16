@@ -149,6 +149,44 @@
         </div>
     </div>
 
+    <!-- Copy Releases Modal -->
+    <div class="modal fade" id="copyReleasesModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="copyReleasesTitle">Copy Releases</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="copySrcRemote">
+                    <input type="hidden" id="copySrcVehicle">
+                    <input type="hidden" id="copySrcReleaseIdx">
+                    <div class="mb-3">
+                        <label class="form-label">Target Remote</label>
+                        <select class="form-select" id="copyTargetRemote" onchange="updateCopyVehicleOptions()"></select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Target Vehicle</label>
+                        <select class="form-select" id="copyTargetVehicle">
+                            <option value="Copter">Copter</option>
+                            <option value="Plane">Plane</option>
+                            <option value="Rover">Rover</option>
+                            <option value="Sub">Sub</option>
+                            <option value="Tracker">Tracker</option>
+                            <option value="Blimp">Blimp</option>
+                            <option value="AP_Periph">AP_Periph</option>
+                        </select>
+                    </div>
+                    <div class="alert alert-info small mb-0" id="copyPreview"></div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button class="btn btn-primary" onclick="submitCopyReleases()"><i class="bi bi-copy me-1"></i>Copy</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Edit Release Modal -->
     <div class="modal fade" id="editReleaseModal" tabindex="-1">
         <div class="modal-dialog">
@@ -256,6 +294,9 @@
                                 <div class="d-flex justify-content-between align-items-center mb-1">
                                     <strong><i class="bi bi-airplane me-2"></i>${esc(vehicle.name)}</strong>
                                     <div>
+                                        <button class="btn btn-sm btn-outline-secondary me-1" onclick="showCopyVehicle('${esc(remote.name)}', '${esc(vehicle.name)}')">
+                                            <i class="bi bi-copy me-1"></i>Copy All to...
+                                        </button>
                                         <button class="btn btn-sm btn-outline-success me-1" onclick="showAddRelease('${esc(remote.name)}', '${esc(vehicle.name)}')">
                                             <i class="bi bi-plus me-1"></i>Release
                                         </button>
@@ -276,6 +317,7 @@
                                                 <td><code>${esc(rel.commit_reference)}</code></td>
                                                 <td>${rel.ap_build_artifacts_url ? `<a href="${esc(rel.ap_build_artifacts_url)}" target="_blank" class="text-truncate d-inline-block" style="max-width:200px">${esc(rel.ap_build_artifacts_url)}</a>` : '<span class="text-muted">-</span>'}</td>
                                                 <td>
+                                                    <button class="btn btn-sm btn-outline-secondary me-1" onclick="showCopyRelease('${esc(remote.name)}', '${esc(vehicle.name)}', ${idx})" title="Copy to..."><i class="bi bi-copy"></i></button>
                                                     <button class="btn btn-sm btn-outline-primary me-1" onclick="showEditRelease('${esc(remote.name)}', '${esc(vehicle.name)}', ${idx})"><i class="bi bi-pencil"></i></button>
                                                     <button class="btn btn-sm btn-outline-danger" onclick="deleteRelease('${esc(remote.name)}', '${esc(vehicle.name)}', ${idx})"><i class="bi bi-x"></i></button>
                                                 </td>
@@ -435,6 +477,90 @@
             if (artifactsUrl) body.ap_build_artifacts_url = artifactsUrl;
             await apiCall('PUT', `/remotes/${encodeURIComponent(remoteName)}/vehicles/${encodeURIComponent(vehicleName)}/releases/${idx}`, body);
             bootstrap.Modal.getInstance(document.getElementById('editReleaseModal')).hide();
+        }
+
+        function populateCopyRemoteDropdown() {
+            const sel = document.getElementById('copyTargetRemote');
+            sel.innerHTML = remotesData.map(r => `<option value="${esc(r.name)}">${esc(r.name)}</option>`).join('');
+        }
+
+        function updateCopyVehicleOptions() {
+            // Optionally pre-select an existing vehicle on the target remote
+        }
+
+        function showCopyVehicle(remoteName, vehicleName) {
+            document.getElementById('copySrcRemote').value = remoteName;
+            document.getElementById('copySrcVehicle').value = vehicleName;
+            document.getElementById('copySrcReleaseIdx').value = '';
+            populateCopyRemoteDropdown();
+            document.getElementById('copyTargetRemote').value = remoteName;
+            const remote = remotesData.find(r => r.name === remoteName);
+            const vehicle = (remote?.vehicles || []).find(v => v.name === vehicleName);
+            const count = (vehicle?.releases || []).length;
+            document.getElementById('copyReleasesTitle').textContent = `Copy All ${vehicleName} Releases`;
+            document.getElementById('copyPreview').textContent = `Will copy ${count} release(s) to the selected target vehicle. If the vehicle doesn't exist on the target remote, it will be created.`;
+            new bootstrap.Modal(document.getElementById('copyReleasesModal')).show();
+        }
+
+        function showCopyRelease(remoteName, vehicleName, idx) {
+            document.getElementById('copySrcRemote').value = remoteName;
+            document.getElementById('copySrcVehicle').value = vehicleName;
+            document.getElementById('copySrcReleaseIdx').value = idx;
+            populateCopyRemoteDropdown();
+            document.getElementById('copyTargetRemote').value = remoteName;
+            const remote = remotesData.find(r => r.name === remoteName);
+            const vehicle = (remote?.vehicles || []).find(v => v.name === vehicleName);
+            const rel = (vehicle?.releases || [])[idx];
+            document.getElementById('copyReleasesTitle').textContent = 'Copy Release';
+            document.getElementById('copyPreview').textContent = `Will copy "${rel?.version_number}" (${rel?.commit_reference}) to the selected target.`;
+            new bootstrap.Modal(document.getElementById('copyReleasesModal')).show();
+        }
+
+        async function submitCopyReleases() {
+            const srcRemote = document.getElementById('copySrcRemote').value;
+            const srcVehicle = document.getElementById('copySrcVehicle').value;
+            const releaseIdx = document.getElementById('copySrcReleaseIdx').value;
+            const targetRemote = document.getElementById('copyTargetRemote').value;
+            const targetVehicle = document.getElementById('copyTargetVehicle').value;
+
+            const remote = remotesData.find(r => r.name === srcRemote);
+            const vehicle = (remote?.vehicles || []).find(v => v.name === srcVehicle);
+            if (!vehicle) return alert('Source vehicle not found');
+
+            const releases = releaseIdx !== ''
+                ? [(vehicle.releases || [])[parseInt(releaseIdx)]]
+                : (vehicle.releases || []);
+
+            if (releases.length === 0) return alert('No releases to copy');
+
+            // Ensure target vehicle exists
+            const tgtRemote = remotesData.find(r => r.name === targetRemote);
+            const tgtVehicle = (tgtRemote?.vehicles || []).find(v => v.name === targetVehicle);
+            if (!tgtVehicle) {
+                // Create vehicle with first release, then add the rest
+                await apiCall('POST', `/remotes/${encodeURIComponent(targetRemote)}/vehicles`, {
+                    name: targetVehicle,
+                    releases: releases.map(r => ({
+                        release_type: r.release_type,
+                        version_number: r.version_number,
+                        commit_reference: r.commit_reference,
+                        ...(r.ap_build_artifacts_url ? {ap_build_artifacts_url: r.ap_build_artifacts_url} : {}),
+                    })),
+                });
+            } else {
+                // Add releases one by one to existing vehicle
+                for (const r of releases) {
+                    const body = {
+                        release_type: r.release_type,
+                        version_number: r.version_number,
+                        commit_reference: r.commit_reference,
+                    };
+                    if (r.ap_build_artifacts_url) body.ap_build_artifacts_url = r.ap_build_artifacts_url;
+                    await apiCall('POST', `/remotes/${encodeURIComponent(targetRemote)}/vehicles/${encodeURIComponent(targetVehicle)}/releases`, body);
+                }
+            }
+
+            bootstrap.Modal.getInstance(document.getElementById('copyReleasesModal')).hide();
         }
 
         async function refreshRemotes() {
