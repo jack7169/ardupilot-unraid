@@ -152,6 +152,12 @@ ap-build test submit Plane \
     test.Plane.ExtPosGPSToExtPosTransition \
     --remote jack7169 --ref feature/extpos-kalman-fusion
 
+# Pin an exact commit SHA (prevents branch drift between test submissions)
+ap-build test submit Plane \
+    test.QuadPlane.GPSDeniedQLoiterExtPos \
+    test.QuadPlane.GPSDeniedVTOLTransitionExtPos \
+    --remote jack7169 --commit 423c00fc139f70eb3c7e52808f4dd3e56a1d016a
+
 # Extra waf flags
 ap-build test submit Plane test.Plane.MainFlight \
     --waf-configure "--debug" --waf-build "-j8"
@@ -200,13 +206,13 @@ ap-build logs <build_id> --follow
 # 4. Download firmware
 ap-build download <build_id> --output my-firmware.tar.gz
 
-# 5. Run all ExtPos tests against your branch
+# 5. Run all ExtPos tests against a pinned commit
 ap-build test submit Plane \
     test.QuadPlane.GPSDeniedQLoiterExtPos \
     test.QuadPlane.GPSDeniedVTOLTransitionExtPos \
     test.QuadPlane.GPSDeniedExtPosDropout \
     test.Plane.ExtPosGPSToExtPosTransition \
-    --remote jack7169 --ref feature/extpos-kalman-fusion
+    --remote jack7169 --commit 423c00fc139f
 
 # 6. Check batch results
 ap-build batch summary batch-20260316-...
@@ -280,7 +286,7 @@ Interactive API docs: [`/autotest/api/docs`](https://jforbes.us/autotest/api/doc
 
 ### Concurrency
 
-- **10 concurrent SITL instances** via instance pool with unique port offsets
+- **50 concurrent SITL instances** via instance pool with unique port offsets
 - Each instance gets ports at `base + instance_num * 10` to avoid collisions
 - The autotest framework is patched at runtime to match the port offsets
 

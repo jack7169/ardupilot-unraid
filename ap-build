@@ -65,6 +65,7 @@ TESTS:
   ap-build test submit <vehicle> <test1> [test2 ...]  Submit SITL autotest(s)
     --remote <name>                                     Git remote (default: origin)
     --ref <branch|tag|sha>                              Git ref to test (default: master)
+    --commit <sha>                                      Pin exact commit SHA (overrides --ref)
     --waf-configure "<flags>"                            Extra waf configure flags
     --waf-build "<flags>"                                Extra waf build flags
 
@@ -304,6 +305,7 @@ test_submit() {
     local vehicle=""
     local -a test_targets=()
     local remote="origin" ref="master"
+    local commit=""
     local waf_configure="" waf_build=""
 
     [[ $# -ge 1 ]] && vehicle="$1" && shift
@@ -313,6 +315,7 @@ test_submit() {
         case "$1" in
             --remote) remote="$2"; shift 2 ;;
             --ref) ref="$2"; shift 2 ;;
+            --commit) commit="$2"; shift 2 ;;
             --waf-configure) waf_configure="$2"; shift 2 ;;
             --waf-build) waf_build="$2"; shift 2 ;;
             -*) err "Unknown flag: $1" ;;
@@ -321,7 +324,12 @@ test_submit() {
     done
 
     [[ -z "$vehicle" || ${#test_targets[@]} -eq 0 ]] && \
-        err "Usage: ap-build test submit <vehicle> <test1> [test2 ...] [--remote X] [--ref X] [--waf-configure \"flags\"] [--waf-build \"flags\"]"
+        err "Usage: ap-build test submit <vehicle> <test1> [test2 ...] [--remote X] [--ref X] [--commit <sha>] [--waf-configure \"flags\"] [--waf-build \"flags\"]"
+
+    # --commit pins the exact SHA, overriding --ref to prevent branch drift
+    if [[ -n "$commit" ]]; then
+        ref="$commit"
+    fi
 
     # Generate batch ID for multi-test submissions
     local batch_id=""
@@ -339,7 +347,11 @@ test_submit() {
         build_args=$(echo "$waf_build" | jq -R 'split(" ") | map(select(. != ""))')
     fi
 
-    info "Submitting ${#test_targets[@]} test(s) for ${vehicle} @ ${remote}/${ref}"
+    if [[ -n "$commit" ]]; then
+        info "Submitting ${#test_targets[@]} test(s) for ${vehicle} @ ${commit} (pinned)"
+    else
+        info "Submitting ${#test_targets[@]} test(s) for ${vehicle} @ ${remote}/${ref}"
+    fi
     [[ -n "$batch_id" ]] && info "  Batch: ${batch_id}"
     [[ -n "$waf_configure" ]] && info "  waf configure: ${waf_configure}"
     [[ -n "$waf_build" ]] && info "  waf build: ${waf_build}"
