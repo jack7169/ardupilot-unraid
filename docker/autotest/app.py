@@ -213,7 +213,7 @@ class AddRemoteRequest(BaseModel):
 # --- Helpers ---
 
 async def run_cmd(cmd: list[str], cwd: str | Path | None = None,
-                  timeout: int = 300) -> tuple[int, str]:
+                  timeout: int = 300, log_cb=None) -> tuple[int, str]:
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -221,25 +221,44 @@ async def run_cmd(cmd: list[str], cwd: str | Path | None = None,
         cwd=cwd,
     )
     try:
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        return proc.returncode, stdout.decode(errors="replace")
+        if log_cb:
+            # Stream output line-by-line to the callback
+            chunks = []
+            async def read_stream():
+                while True:
+                    line = await proc.stdout.readline()
+                    if not line:
+                        break
+                    text = line.decode(errors="replace")
+                    chunks.append(text)
+                    log_cb(text)
+            await asyncio.wait_for(read_stream(), timeout=timeout)
+            await proc.wait()
+            return proc.returncode, "".join(chunks)
+        else:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            return proc.returncode, stdout.decode(errors="replace")
     except asyncio.TimeoutError:
         proc.kill()
         await proc.wait()
         return -1, "Command timed out"
 
 
-async def ensure_repo():
+async def ensure_repo(log_cb=None):
     if not (ARDUPILOT_DIR / "waf").exists():
         logger.info("Cloning ardupilot repository...")
+        if log_cb:
+            log_cb("Cloning ardupilot repository (first run)...\n")
         rc, out = await run_cmd(
-            ["git", "clone", "--recurse-submodules",
+            ["git", "clone", "--progress", "--recurse-submodules",
              "https://github.com/ArduPilot/ardupilot.git", str(ARDUPILOT_DIR)],
-            timeout=600,
+            timeout=600, log_cb=log_cb,
         )
         if rc != 0:
             raise RuntimeError(f"Failed to clone: {out}")
         logger.info("Clone complete")
+        if log_cb:
+            log_cb("Clone complete\n")
     WORKTREES_DIR.mkdir(parents=True, exist_ok=True)
     TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
     BUILD_TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
@@ -330,7 +349,7 @@ async def resolve_ref(remote_name: str, ref: str) -> str:
     return ref
 
 
-async def get_or_create_template(commit: str) -> Path:
+async def get_or_create_template(commit: str, log_cb=None) -> Path:
     """
     Get a cached template worktree for a commit, or create one.
     Templates are git worktrees with submodules initialized — ready to copy.
@@ -348,6 +367,8 @@ async def get_or_create_template(commit: str) -> Path:
                 del template_cache[commit]
 
     logger.info(f"Template cache MISS for {commit[:12]}, creating...")
+    if log_cb:
+        log_cb(f"Creating source template for {commit[:12]}...\n")
 
     # Evict oldest if at capacity
     evict_entry = None
@@ -376,9 +397,11 @@ async def get_or_create_template(commit: str) -> Path:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, shutil.rmtree, tpl_path, True)
 
+    if log_cb:
+        log_cb(f"  Creating worktree at {tpl_path.name}...\n")
     rc, out = await run_cmd(
         ["git", "worktree", "add", "--detach", str(tpl_path), commit],
-        cwd=ARDUPILOT_DIR, timeout=120,
+        cwd=ARDUPILOT_DIR, timeout=120, log_cb=log_cb,
     )
     if rc != 0:
         raise RuntimeError(f"Failed to create template worktree: {out}")
@@ -392,7 +415,9 @@ async def get_or_create_template(commit: str) -> Path:
     # Use main repo's submodule objects as reference to avoid re-fetching
     if (ARDUPILOT_DIR / ".git" / "modules").exists():
         submodule_cmd.extend(["--reference", str(ARDUPILOT_DIR)])
-    rc, out = await run_cmd(submodule_cmd, cwd=tpl_path, timeout=300)
+    if log_cb:
+        log_cb(f"  Submodule update ({cpu_count} jobs)...\n")
+    rc, out = await run_cmd(submodule_cmd, cwd=tpl_path, timeout=300, log_cb=log_cb)
     if rc != 0:
         logger.warning(f"Submodule update issue for template {commit[:12]}: {out}")
 
@@ -515,6 +540,8 @@ async def get_or_create_build_template(
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, shutil.rmtree, bld_path, True)
 
+    if log_cb:
+        log_cb(f"Copying source template to build dir...\n")
     rc, out = await run_cmd(
         ["cp", "-a", "--reflink=auto", str(source_template), str(bld_path)],
         timeout=300,
@@ -652,7 +679,10 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
         test_info["log"] += " ===\n"
         await flush_log(test_info)
 
-        await ensure_repo()
+        def source_log(msg):
+            test_info["log"] += msg
+
+        await ensure_repo(log_cb=source_log)
 
         # Phase 1: Resolve commit — local checks are lock-free, only fetch serializes
         found, resolved = await commit_is_local(ref, remote)
@@ -704,7 +734,7 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
                         template_path = template_cache[commit]["path"]
                         test_info["log"] += f"Template appeared while waiting (cache HIT)\n"
                 if template_path is None:
-                    template_path = await get_or_create_template(commit)
+                    template_path = await get_or_create_template(commit, log_cb=source_log)
 
         test_info["log"] += f"Template: {template_path}\n"
         await flush_log(test_info)
