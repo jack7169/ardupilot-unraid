@@ -18,7 +18,7 @@ from pydantic import BaseModel
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="ArduPilot Autotest", docs_url=None, redoc_url=None)
+app = FastAPI(title="ArduPilot Autotest", docs_url="/autotest/api/docs", redoc_url=None)
 
 WORKDIR = Path(os.environ.get("AUTOTEST_WORKDIR", "/workdir"))
 ARDUPILOT_DIR = WORKDIR / "ardupilot"

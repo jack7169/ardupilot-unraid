@@ -47,6 +47,11 @@
         reverse_proxy admin:8090
     }
 
+    # API capabilities discovery (for AI agents)
+    handle /api/capabilities {
+        reverse_proxy admin:8090
+    }
+
     # Default: CustomBuild frontend
     handle {
         reverse_proxy custombuild-app:8080

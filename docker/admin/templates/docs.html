@@ -242,10 +242,25 @@ ap-build git update --remote-url https://github.com/user/ardupilot.git \
 
         <!-- REST API -->
         <h2><i class="bi bi-braces me-2"></i>REST API</h2>
-        <p>The full API is available at <code>/api/v1/</code>.</p>
+        <p>The full API is available at <code>/api/v1/</code>. Interactive Swagger docs are available for each service:</p>
+        <ul>
+            <li><a href="/api/docs">Build API Docs</a> (<code>/api/docs</code>)</li>
+            <li><a href="/autotest/api/docs">Autotest API Docs</a> (<code>/autotest/api/docs</code>)</li>
+            <li><a href="/admin/api/docs">Admin API Docs</a> (<code>/admin/api/docs</code>)</li>
+        </ul>
+
+        <h3>AI Agent Discovery</h3>
+        <p>A machine-readable capabilities endpoint is available for AI agents and automation:</p>
+        <pre>curl http://carthagenas.local:8000/api/capabilities | jq .</pre>
+        <p>Returns a structured JSON document describing every available operation across all services, including parameters, types, and example requests.</p>
+
+        <h3>Endpoint Reference</h3>
         <table class="table table-bordered">
             <thead><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr></thead>
             <tbody>
+                <tr><td colspan="3" class="table-secondary"><strong>Discovery</strong></td></tr>
+                <tr><td><code>GET</code></td><td><code>/api/capabilities</code></td><td>Machine-readable API discovery (all operations, parameters, examples)</td></tr>
+                <tr><td colspan="3" class="table-secondary"><strong>Firmware Builds</strong></td></tr>
                 <tr><td><code>GET</code></td><td><code>/api/v1/vehicles</code></td><td>List vehicle types</td></tr>
                 <tr><td><code>GET</code></td><td><code>/api/v1/vehicles/{id}/versions</code></td><td>List versions for a vehicle</td></tr>
                 <tr><td><code>GET</code></td><td><code>/api/v1/vehicles/{id}/versions/{vid}/boards</code></td><td>List boards</td></tr>
@@ -255,7 +270,11 @@ ap-build git update --remote-url https://github.com/user/ardupilot.git \
                 <tr><td><code>GET</code></td><td><code>/api/v1/builds/{id}</code></td><td>Get build status</td></tr>
                 <tr><td><code>GET</code></td><td><code>/api/v1/builds/{id}/logs</code></td><td>Get build logs</td></tr>
                 <tr><td><code>GET</code></td><td><code>/api/v1/builds/{id}/artifact</code></td><td>Download build artifact</td></tr>
-                <tr><td colspan="3" class="table-secondary"><strong>Autotest</strong></td></tr>
+                <tr><td colspan="3" class="table-secondary"><strong>SITL Autotest</strong></td></tr>
+                <tr><td><code>GET</code></td><td><code>/autotest/api/status</code></td><td>Service status (busy/idle)</td></tr>
+                <tr><td><code>GET</code></td><td><code>/autotest/api/vehicles</code></td><td>List testable vehicles</td></tr>
+                <tr><td><code>GET</code></td><td><code>/autotest/api/subtests</code></td><td>List subtests for a vehicle</td></tr>
+                <tr><td><code>GET</code></td><td><code>/autotest/api/test-suites</code></td><td>List test suite names</td></tr>
                 <tr><td><code>POST</code></td><td><code>/autotest/api/tests</code></td><td>Submit a SITL test</td></tr>
                 <tr><td><code>GET</code></td><td><code>/autotest/api/tests</code></td><td>List test runs</td></tr>
                 <tr><td><code>GET</code></td><td><code>/autotest/api/tests/{id}</code></td><td>Get test status</td></tr>
@@ -267,6 +286,12 @@ ap-build git update --remote-url https://github.com/user/ardupilot.git \
                 <tr><td><code>GET</code></td><td><code>/autotest/api/git/branches</code></td><td>List branches</td></tr>
                 <tr><td><code>GET</code></td><td><code>/autotest/api/git/tags</code></td><td>List tags</td></tr>
                 <tr><td><code>POST</code></td><td><code>/autotest/api/git/add-remote</code></td><td>Add a git remote</td></tr>
+                <tr><td colspan="3" class="table-secondary"><strong>Admin</strong></td></tr>
+                <tr><td><code>GET</code></td><td><code>/admin/api/remotes</code></td><td>List build remotes</td></tr>
+                <tr><td><code>POST</code></td><td><code>/admin/api/remotes</code></td><td>Add a build remote</td></tr>
+                <tr><td><code>PUT</code></td><td><code>/admin/api/remotes/{name}</code></td><td>Update a remote</td></tr>
+                <tr><td><code>DELETE</code></td><td><code>/admin/api/remotes/{name}</code></td><td>Delete a remote</td></tr>
+                <tr><td><code>GET</code></td><td><code>/status/api</code></td><td>System health status</td></tr>
             </tbody>
         </table>
 
