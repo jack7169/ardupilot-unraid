@@ -602,13 +602,13 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
             test_info["log"] += "=" * 60 + "\n"
             flush_log(test_info)
 
-            # Port isolation for concurrent SITL instances:
-            # 1. Replace SITL binaries with shims that inject -I <instance>
-            #    (offsets SITL bind ports by instance*10)
-            # 2. Patch vehicle_test_suite.py so the autotest framework
-            #    connects to the offset ports too
+            # Port isolation for concurrent SITL instances.
+            # SITL -I N offsets ALL ports by N*10: base_port, serial ports,
+            # RC input, etc. We must also patch the autotest framework so
+            # it connects to the same offset ports.
             port_offset = instance_num * 10
 
+            # 1. Shim SITL binaries to inject -I <instance>
             bin_dir = wt_path / "build" / "sitl" / "bin"
             if bin_dir.exists():
                 for binary in bin_dir.iterdir():
@@ -621,10 +621,11 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
                             )
                             binary.chmod(0o755)
 
-            # Patch autotest framework to connect to offset ports
+            # 2. Patch vehicle_test_suite.py — all port methods
             vts_path = wt_path / "Tools" / "autotest" / "vehicle_test_suite.py"
             if vts_path.exists():
                 vts = vts_path.read_text()
+                # adjust_ardupilot_port: used for MAVLink ports (5760, 5762, 5763)
                 vts = vts.replace(
                     "def adjust_ardupilot_port(self, port):\n"
                     "        '''adjust port in case we do not wish to use the default range (5760 and 5501 etc)'''\n"
@@ -633,6 +634,18 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
                     "        '''adjust port in case we do not wish to use the default range (5760 and 5501 etc)'''\n"
                     f"        return port + {port_offset}",
                 )
+                # sitl_rcin_port: RC input port (5501)
+                vts = vts.replace(
+                    "def sitl_rcin_port(self, offset=0):\n"
+                    "        if offset > 2:\n"
+                    "            raise ValueError(\"offset too large\")\n"
+                    "        return 5501 + offset",
+                    "def sitl_rcin_port(self, offset=0):\n"
+                    "        if offset > 2:\n"
+                    "            raise ValueError(\"offset too large\")\n"
+                    f"        return {5501 + port_offset} + offset",
+                )
+                # spare_network_port: auxiliary ports (8000+)
                 vts = vts.replace(
                     "def spare_network_port(self, offset=0):\n"
                     "        '''returns a network port which should be able to be bound'''\n"
@@ -646,6 +659,16 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
                     f"        return {8000 + port_offset} + offset",
                 )
                 vts_path.write_text(vts)
+
+            # 3. Patch util.py — mavproxy default rcin port
+            util_path = wt_path / "Tools" / "autotest" / "pysim" / "util.py"
+            if util_path.exists():
+                util_src = util_path.read_text()
+                util_src = util_src.replace(
+                    "sitl_rcin_port=5501,",
+                    f"sitl_rcin_port={5501 + port_offset},",
+                )
+                util_path.write_text(util_src)
 
             run_env = test_env
 
