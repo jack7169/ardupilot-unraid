@@ -4,65 +4,68 @@ Self-hosted ArduPilot custom firmware builder and SITL autotest runner on Unraid
 
 ## Architecture
 
+All services run inside a single Docker container (`ardupilot-bundled`) managed by supervisord. Cloudflare Tunnel runs as a sidecar container for public ingress.
+
 ```
-                        ┌──────────────────────┐
-    Internet ──────────▶│   Cloudflare Tunnel  │
-                        │   (Zero Trust Auth)  │
-                        └──────────┬───────────┘
-                                   │
-    LAN ───────────────────────────┤
-                                   │
-                        ┌──────────▼───────────┐
-                        │   Caddy (reverse     │
-                        │   proxy + static)    │
-                        │        :8000         │
-                        └──┬───┬───┬───┬───┬───┘
-                           │   │   │   │   │
-         ┌─────────────────┘   │   │   │   └─────────────────┐
-         ▼                     ▼   │   ▼                     ▼
-    ┌─────────┐      ┌──────────┐  │ ┌──────────┐       ┌───────────┐
-    │CustomBld│      │  Admin   │  │ │Autotest  │       │ Cloudflare│
-    │  App    │      │ Service  │  │ │ Service  │       │  Tunnel   │
-    │ :8080   │      │  :8090   │  │ │  :8091   │       │           │
-    └────┬────┘      └──────────┘  │ └─────┬────┘       └───────────┘
-         │                         │       │
-    ┌────▼────┐             ┌──────▼───────▼──────┐
-    │CustomBld│             │   Shared Volumes    │
-    │ Builder │             │ • custombuild-base  │
-    │ (worker)│             │ • autotest-workdir  │
-    └────┬────┘             │ • autotest-results  │
-         │                  │ • ardupilot-logs    │
-    ┌────▼────┐             └─────────────────────┘
-    │  Redis  │
-    │  :6379  │
-    └─────────┘
+                         ┌──────────────────────┐
+     Internet ──────────▶│  Cloudflare Tunnel   │
+                         │  (Zero Trust Auth)   │
+                         └──────────┬───────────┘
+                                    │
+     LAN ───────────────────────────┤
+                                    │
+    ┌───────────────────────────────▼───────────────────────────────┐
+    │  ardupilot-bundled (supervisord)                              │
+    │                                                               │
+    │   ┌─────────────────────────────────────────────────────┐    │
+    │   │  Caddy (reverse proxy + static files)  :8000        │    │
+    │   └──────┬────────┬────────┬────────────────────────────┘    │
+    │          │        │        │                                  │
+    │   ┌──────▼──┐ ┌───▼────┐ ┌─▼────────┐                       │
+    │   │CustomBld│ │ Admin  │ │ Autotest  │                       │
+    │   │  App    │ │Service │ │ Service   │                       │
+    │   │ :8080   │ │ :8090  │ │  :8091    │                       │
+    │   └────┬────┘ └────────┘ └───────────┘                       │
+    │        │                                                      │
+    │   ┌────▼────┐    ┌─────────┐                                 │
+    │   │CustomBld│    │  Redis  │                                  │
+    │   │ Builder │◄──▶│  :6379  │                                  │
+    │   │ (worker)│    └─────────┘                                  │
+    │   └─────────┘                                                 │
+    │                                                               │
+    │   Volumes: /data/custombuild-base, /data/autotest-workdir,   │
+    │            /data/autotest-results, /data/buildlogs           │
+    └───────────────────────────────────────────────────────────────┘
 ```
 
-### Services
+### Services (inside single container)
 
-| Service | Container | Port | Description |
-|---------|-----------|------|-------------|
-| **CustomBuild App** | `ardupilot-custombuild-app` | 8080 | Web UI and REST API for custom firmware builds |
-| **CustomBuild Builder** | `ardupilot-custombuild-builder` | — | Worker that compiles firmware from Redis queue |
-| **Redis** | `ardupilot-redis` | 6379 | Job queue between web app and builder |
-| **Admin** | `ardupilot-admin` | 8090 | Remotes management, status dashboard, docs, results viewer |
-| **Autotest** | `ardupilot-autotest` | 8091 | SITL test execution with concurrent instance pool |
-| **Caddy** | `ardupilot-caddy` | 8000 | Reverse proxy routing to all services |
-| **Cloudflare Tunnel** | `ardupilot-cloudflared` | — | Public ingress via Cloudflare Zero Trust |
+| Process | Port | Description |
+|---------|------|-------------|
+| **Caddy** | 8000 | Reverse proxy routing to all services (only exposed port) |
+| **CustomBuild App** | 8080 | Web UI and REST API for custom firmware builds |
+| **CustomBuild Builder** | — | Worker that compiles firmware from Redis queue |
+| **Redis** | 6379 | In-memory job queue between web app and builder |
+| **Admin** | 8090 | Remotes management, status dashboard, docs, results viewer |
+| **Autotest** | 8091 | SITL test execution with concurrent instance pool |
+
+The **Cloudflare Tunnel** (`ardupilot-cloudflared`) runs as a separate sidecar container for public ingress via Zero Trust.
 
 ### URL Routing (Caddyfile)
 
+All routing is internal via localhost within the bundled container:
+
 | Path | Backend | Description |
 |------|---------|-------------|
-| `/` | custombuild-app:8080 | Build dashboard and firmware builder |
-| `/add_build` | custombuild-app:8080 | Create new firmware build |
-| `/admin` | admin:8090 | Remotes/branch management |
-| `/autotest` | admin:8090 | Test submission UI |
-| `/autotest/api/*` | autotest:8091 | Test execution API |
-| `/status` | admin:8090 | System status dashboard |
-| `/docs` | admin:8090 | Documentation |
-| `/results/` | admin:8090 | Test results and build logs |
-| `/api/capabilities` | admin:8090 | Machine-readable API discovery |
+| `/` | 127.0.0.1:8080 | Build dashboard and firmware builder |
+| `/add_build` | 127.0.0.1:8080 | Create new firmware build |
+| `/admin` | 127.0.0.1:8090 | Remotes/branch management |
+| `/autotest` | 127.0.0.1:8090 | Test submission UI |
+| `/autotest/api/*` | 127.0.0.1:8091 | Test execution API |
+| `/status` | 127.0.0.1:8090 | System status dashboard |
+| `/docs` | 127.0.0.1:8090 | Documentation |
+| `/results/` | 127.0.0.1:8090 | Test results and build logs |
+| `/api/capabilities` | 127.0.0.1:8090 | Machine-readable API discovery |
 
 ## Web UI
 
@@ -304,7 +307,7 @@ Interactive API docs: [`/autotest/api/docs`](https://jforbes.us/autotest/api/doc
 
 ### Concurrency
 
-- **50 concurrent SITL instances** via instance pool with unique port offsets
+- **10 concurrent SITL instances** via instance pool with unique port offsets
 - Each instance gets ports at `base + instance_num * 10` to avoid collisions
 - The autotest framework is patched at runtime to match the port offsets
 
@@ -344,105 +347,107 @@ Public access at `https://jforbes.us` is gated by Cloudflare Zero Trust:
 - **Allowed domains**: `@s2va.mil`, `@tyrlaboratories.com`
 - **LAN bypass**: `http://carthagenas.local:8000` (no auth required)
 
-## Deployment on Unraid
+## Deployment
 
-### Prerequisites
+### Bundled Container (Recommended)
 
-- Unraid server with Docker support
+The bundled deployment runs all services in a single container managed by supervisord. Cloudflare Tunnel runs as a sidecar.
+
+#### Prerequisites
+
+- Docker host with `docker-compose`
 - 24+ CPU cores recommended (SITL tests are CPU-intensive)
 - 16GB+ RAM minimum
 - Cloudflare account with a domain (for public access)
 
-### Directory Structure on Server
+#### Directory Structure on Server
 
 ```
 /mnt/user/appdata/ardupilot/
-├── docker/                         # Docker Compose stack (this repo)
-│   ├── docker-compose.yml
-│   ├── .env
-│   ├── admin/
-│   ├── autotest/
-│   └── caddy/
-├── custombuild/                    # Upstream CustomBuild (git clone)
-├── custombuild-base/               # Shared volume: build configs + remotes.json
-│   └── configs/remotes.json
-├── custombuild-templates/          # Patched HTML templates mounted into app
-├── buildlogs/                      # Test results and build logs
-└── docker/admin/static/            # Admin static assets
+├── servers-repo/                     # This repo (git clone)
+│   ├── docker/bundled/               # Bundled deployment
+│   │   ├── Dockerfile
+│   │   ├── docker-compose.yml
+│   │   ├── .env
+│   │   └── config/
+│   │       ├── supervisord.conf
+│   │       ├── Caddyfile
+│   │       ├── config.yaml
+│   │       └── entrypoint.sh
+│   ├── docker/admin/                 # Admin service source
+│   ├── docker/autotest/              # Autotest service source
+│   ├── docker/templates/             # Custom HTML templates
+│   └── custombuild/                  # CustomBuild submodule
+├── bundled-data/                     # Data volume
+│   ├── custombuild-base/             # Build configs, remotes.json, artifacts
+│   ├── autotest-workdir/             # Git repos and worktrees
+│   └── autotest-results/             # Test output
+└── buildlogs/                        # Shared build/test logs
 ```
 
-### Initial Setup
+#### Initial Setup
 
 ```bash
-# 1. Clone this repo to the server
+# 1. Clone this repo with submodules
 ssh root@carthagenas.local
 cd /mnt/user/appdata/ardupilot
-git clone git@github.com:jack7169/ardupilot-unraid.git docker
+git clone git@github.com:jack7169/ardupilot-unraid.git servers-repo
+cd servers-repo
+git submodule update --init custombuild
 
-# 2. Clone upstream CustomBuild
-git clone https://github.com/ArduPilot/CustomBuild.git custombuild
+# 2. Create data directories
+mkdir -p /mnt/user/appdata/ardupilot/bundled-data/{custombuild-base/configs,autotest-workdir,autotest-results}
+mkdir -p /mnt/user/appdata/ardupilot/buildlogs
 
-# 3. Create required directories
-mkdir -p custombuild-base/configs custombuild-templates buildlogs
+# 3. Configure environment
+cd docker/bundled
+cp .env.example .env
+# Edit .env with your Cloudflare tunnel token and paths
 
-# 4. Copy patched templates
-cp docker/templates/*.html custombuild-templates/
-
-# 5. Configure environment
-cd docker
-cp .env.example .env    # Edit with your Cloudflare tunnel token
-
-# 6. Start all services
+# 4. Build and start
 docker-compose up -d --build
 
-# 7. Verify
-curl http://localhost:8000/status/api
+# 5. Verify (wait ~30s for initial startup)
+curl http://localhost:8000/status
 ```
 
-### Environment Variables
+#### Environment Variables (`.env`)
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `CLOUDFLARE_TUNNEL_TOKEN` | Yes (for public access) | Cloudflare Tunnel token |
-| `CBS_LOG_LEVEL` | No | Log level (default: `INFO`) |
-| `CBS_BUILD_TIMEOUT_SEC` | No | Build timeout in seconds (default: `900`) |
-| `CBS_REMOTES_RELOAD_TOKEN` | No | Token for triggering CustomBuild reload |
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `CLOUDFLARE_TUNNEL_TOKEN` | Yes (for public access) | — | Cloudflare Tunnel token |
+| `CBS_LOG_LEVEL` | No | `INFO` | Log level |
+| `CBS_BUILD_TIMEOUT_SEC` | No | `900` | Build timeout in seconds |
+| `CBS_REMOTES_RELOAD_TOKEN` | No | — | Token for triggering CustomBuild reload |
+| `DATA_DIR` | No | `/mnt/user/appdata/ardupilot/bundled-data` | Data volume host path |
+| `BUILDLOGS_DIR` | No | `/mnt/user/appdata/ardupilot/buildlogs` | Build logs host path |
 
-### Updating
+#### Updating
 
 ```bash
 ssh root@carthagenas.local
-cd /mnt/user/appdata/ardupilot/docker
+cd /mnt/user/appdata/ardupilot/servers-repo
 
 # Pull latest code
 git pull
-
-# Copy updated templates
-cp templates/*.html /mnt/user/appdata/ardupilot/custombuild-templates/
+git submodule update
 
 # Rebuild and restart
+cd docker/bundled
 docker-compose up -d --build
 ```
 
-### Deploying from Development Machine
+#### Monitoring
 
 ```bash
-# Deploy specific services
-scp docker/autotest/app.py root@carthagenas.local:/mnt/user/appdata/ardupilot/docker/autotest/app.py
-scp docker/admin/app.py root@carthagenas.local:/mnt/user/appdata/ardupilot/docker/admin/app.py
-scp docker/templates/*.html root@carthagenas.local:/mnt/user/appdata/ardupilot/custombuild-templates/
-scp docker/admin/templates/*.html root@carthagenas.local:/mnt/user/appdata/ardupilot/docker/admin/templates/
+# All process logs (via supervisord)
+docker logs -f ardupilot-bundled
 
-# Rebuild affected containers
-ssh root@carthagenas.local "cd /mnt/user/appdata/ardupilot/docker && docker-compose up -d --build admin autotest && docker-compose up -d --force-recreate caddy"
-```
-
-### Monitoring
-
-```bash
-# Service logs
-docker-compose logs -f autotest
-docker-compose logs -f custombuild-builder
+# Individual service logs
+docker exec ardupilot-bundled cat /var/log/supervisor/admin.log
+docker exec ardupilot-bundled cat /var/log/supervisor/autotest.log
+docker exec ardupilot-bundled cat /var/log/supervisor/custombuild-app.log
+docker exec ardupilot-bundled cat /var/log/supervisor/custombuild-builder.log
 
 # System metrics
 curl http://localhost:8000/autotest/api/metrics
@@ -451,18 +456,22 @@ curl http://localhost:8000/autotest/api/metrics
 curl http://localhost:8000/status/api
 ```
 
-### Docker vDisk Management
+#### Disk Management
 
-The autotest container can fill its 20GB vDisk with worktrees and build artifacts. The service auto-cleans worktrees after tests complete and evicts old templates, but if space gets low:
+The autotest service auto-cleans worktrees after tests and evicts old templates via LRU caching, but if space gets low:
 
 ```bash
 # Check disk usage
-docker exec ardupilot-autotest df -h /
+docker exec ardupilot-bundled df -h /data
 
 # Manual cleanup of worktrees
-docker exec ardupilot-autotest bash -c 'rm -rf /workdir/worktrees/*'
+docker exec ardupilot-bundled rm -rf /data/autotest-workdir/worktrees/*
 
 # Prune Docker build cache
 docker builder prune -f
 docker image prune -f
 ```
+
+### Legacy Multi-Container Deployment
+
+The original 7-container docker-compose stack is still available at `docker/docker-compose.yml` for reference. See git history for setup instructions.
