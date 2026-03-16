@@ -63,6 +63,7 @@ RUN mkdir -p \
     /app/custombuild \
     /app/admin \
     /app/autotest \
+    /workdir \
     /data/custombuild-base/configs \
     /data/autotest-workdir \
     /data/autotest-results \
@@ -83,16 +84,19 @@ COPY --chown=ardupilot:ardupilot custombuild/ /app/custombuild/
 # Override custombuild templates with custom versions
 COPY --chown=ardupilot:ardupilot docker/templates/ /app/custombuild/web/templates/
 
-# Copy admin service
+# Copy admin service (app.py expects /app/templates and /app/static)
 COPY --chown=ardupilot:ardupilot docker/admin/app.py /app/admin/
 COPY --chown=ardupilot:ardupilot docker/admin/templates/ /app/admin/templates/
 COPY --chown=ardupilot:ardupilot docker/admin/static/ /app/admin/static/
+# Admin app.py has hardcoded /app/templates and /app/static paths
+RUN ln -s /app/admin/templates /app/templates && \
+    ln -s /app/admin/static /app/static
 
 # Copy autotest service
 COPY --chown=ardupilot:ardupilot docker/autotest/app.py /app/autotest/
 
 # Set ownership on data directories
-RUN chown -R ardupilot:ardupilot /data /app /var/log/supervisor
+RUN chown -R ardupilot:ardupilot /data /app /workdir /var/log/supervisor
 
 EXPOSE 8000
 
