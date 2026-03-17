@@ -263,6 +263,21 @@ async def ensure_repo(log_cb=None):
         logger.info("Clone complete")
         if log_cb:
             log_cb("Clone complete\n")
+
+    # Ensure submodules are initialized in the main repo (golden copy for templates)
+    if not (ARDUPILOT_DIR / "modules" / "mavlink" / ".git").exists():
+        logger.info("Initializing submodules in base repo...")
+        if log_cb:
+            log_cb("Initializing submodules in base repo...\n")
+        cpu_count = os.cpu_count() or 4
+        rc, out = await run_cmd(
+            ["git", "submodule", "update", "--init", "--recursive",
+             "--depth", "1", f"--jobs={cpu_count}"],
+            cwd=ARDUPILOT_DIR, timeout=600, log_cb=log_cb,
+        )
+        if rc != 0:
+            logger.warning(f"Submodule init issue: {out}")
+
     WORKTREES_DIR.mkdir(parents=True, exist_ok=True)
     TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
     BUILD_TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
@@ -410,18 +425,52 @@ async def get_or_create_template(commit: str, log_cb=None) -> Path:
     if rc != 0:
         raise RuntimeError(f"Failed to create template worktree: {out}")
 
-    cpu_count = os.cpu_count() or 4
-    submodule_cmd = [
-        "git", "submodule", "update", "--init", "--recursive",
-        "--depth", "1",
-        f"--jobs={cpu_count}",
-    ]
-    # Use main repo's submodule objects as reference to avoid re-fetching
-    if (ARDUPILOT_DIR / ".git" / "modules").exists():
-        submodule_cmd.extend(["--reference", str(ARDUPILOT_DIR)])
-    if log_cb:
-        log_cb(f"  Submodule update ({cpu_count} jobs)...\n")
-    rc, out = await run_cmd(submodule_cmd, cwd=tpl_path, timeout=300, log_cb=log_cb)
+    # Fast submodule init: copy git module stores from main repo, then checkout.
+    # This avoids all network fetches — purely local filesystem operations.
+    # On btrfs (Docker vDisk), --reflink=auto makes the copy near-instant (COW).
+    main_modules = ARDUPILOT_DIR / ".git" / "modules"
+    if main_modules.exists():
+        if log_cb:
+            log_cb(f"  Copying submodule objects from base repo (local)...\n")
+        # Worktree .git is a file pointing to the main repo's worktrees dir;
+        # we need the actual git dir for this worktree
+        tpl_gitdir = tpl_path / ".git"
+        if tpl_gitdir.is_file():
+            # Read the gitdir path from the worktree .git file
+            gitdir_content = tpl_gitdir.read_text().strip()
+            if gitdir_content.startswith("gitdir: "):
+                actual_gitdir = Path(gitdir_content[8:])
+                if not actual_gitdir.is_absolute():
+                    actual_gitdir = (tpl_path / actual_gitdir).resolve()
+            else:
+                actual_gitdir = tpl_gitdir
+        else:
+            actual_gitdir = tpl_gitdir
+
+        modules_dest = actual_gitdir / "modules"
+        rc, out = await run_cmd(
+            ["cp", "-a", "--reflink=auto", str(main_modules), str(modules_dest)],
+            timeout=120, log_cb=log_cb,
+        )
+        if rc != 0:
+            logger.warning(f"Failed to copy modules, falling back to remote fetch: {out}")
+
+        if log_cb:
+            log_cb(f"  Initializing submodule working trees...\n")
+        rc, out = await run_cmd(
+            ["git", "submodule", "update", "--init", "--recursive"],
+            cwd=tpl_path, timeout=300, log_cb=log_cb,
+        )
+    else:
+        # Fallback: no cached modules, fetch from remote
+        cpu_count = os.cpu_count() or 4
+        if log_cb:
+            log_cb(f"  Submodule update from remote ({cpu_count} jobs)...\n")
+        rc, out = await run_cmd(
+            ["git", "submodule", "update", "--init", "--recursive",
+             "--depth", "1", f"--jobs={cpu_count}"],
+            cwd=tpl_path, timeout=300, log_cb=log_cb,
+        )
     if rc != 0:
         logger.warning(f"Submodule update issue for template {commit[:12]}: {out}")
 
