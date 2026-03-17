@@ -246,6 +246,10 @@ async def run_cmd(cmd: list[str], cwd: str | Path | None = None,
 
 async def ensure_repo(log_cb=None):
     if not (ARDUPILOT_DIR / "waf").exists():
+        # Clean up incomplete clone if present
+        if ARDUPILOT_DIR.exists():
+            logger.info("Removing incomplete clone...")
+            shutil.rmtree(ARDUPILOT_DIR, ignore_errors=True)
         logger.info("Cloning ardupilot repository...")
         if log_cb:
             log_cb("Cloning ardupilot repository (first run)...\n")
