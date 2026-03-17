@@ -608,9 +608,8 @@ async def get_or_create_build_template(
     if log_cb:
         log_cb(f"=== Configure: {' '.join(configure_cmd)} ===\n")
 
-    rc, out = await run_cmd(configure_cmd, cwd=bld_path, timeout=120)
-    if log_cb:
-        log_cb(out + "\n")
+    rc, out = await run_cmd(configure_cmd, cwd=bld_path, timeout=120,
+                            log_cb=log_cb)
     if rc != 0:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, shutil.rmtree, bld_path, True)
@@ -623,9 +622,8 @@ async def get_or_create_build_template(
     if log_cb:
         log_cb(f"=== Build: {' '.join(build_cmd)} ===\n")
 
-    rc, out = await run_cmd(build_cmd, cwd=bld_path, timeout=600)
-    if log_cb:
-        log_cb(out + "\n")
+    rc, out = await run_cmd(build_cmd, cwd=bld_path, timeout=600,
+                            log_cb=log_cb)
     if rc != 0:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, shutil.rmtree, bld_path, True)
