@@ -70,12 +70,14 @@ TESTS:
     --waf-build "<flags>"                                Extra waf build flags
 
   ap-build test list                                  List recent test runs
+  ap-build test watch <test_id>                       Watch live progress + log output
   ap-build test status <test_id>                      Check test status
   ap-build test logs <test_id> [--tail N] [--follow]  View test logs
   ap-build test cancel <test_id>                      Cancel a running test
 
 BATCHES (multi-test submissions get auto-assigned batch IDs):
   ap-build batch list                                 List all batches
+  ap-build batch watch <batch_id> [--timeout <secs>]  Watch live progress (default timeout 600s)
   ap-build batch status <batch_id>                    Show batch pass/fail counts + test list
   ap-build batch summary <batch_id>                   Compact pass/fail summary (AI-friendly)
   ap-build batch logs <batch_id>                      All logs for every test in the batch
@@ -92,7 +94,7 @@ GIT (autotest repo):
     --ref <branch|tag|sha>   Ref to checkout (default: master)
 
 ENVIRONMENT:
-  AP_BUILD_URL   Base URL (default: http://192.168.50.45:8000)
+  AP_BUILD_URL   Base URL (default: http://100.99.196.120:8000)
 
 EXAMPLES:
   ap-build list versions plane
@@ -378,13 +380,11 @@ test_submit() {
     echo -e "${BOLD}${#submitted_ids[@]} test(s) submitted${NC}"
     if [[ -n "$batch_id" ]]; then
         echo -e "Batch: ${BOLD}${batch_id}${NC}"
-        echo -e "Track progress:"
-        echo -e "  ap-build batch status ${batch_id}"
-        echo -e "  ap-build batch logs ${batch_id}"
+        echo -e "\nWatch progress:"
+        echo -e "  ap-build batch watch ${batch_id}"
     else
-        echo -e "Track progress:"
-        echo -e "  ap-build test status ${submitted_ids[0]}"
-        echo -e "  ap-build test logs ${submitted_ids[0]} --follow"
+        echo -e "\nWatch progress:"
+        echo -e "  ap-build test watch ${submitted_ids[0]}"
     fi
 }
 
@@ -465,6 +465,45 @@ test_logs() {
     else
         api_get "${AUTOTEST_API}/tests/${test_id}/logs${tail_param}"
     fi
+}
+
+test_watch() {
+    local test_id="${1:?Usage: ap-build test watch <test_id>}"
+    local prev_len=0
+
+    while true; do
+        local data
+        data=$(curl -sf "${AUTOTEST_API}/tests/${test_id}" 2>/dev/null) || { sleep 2; continue; }
+
+        local state
+        state=$(echo "$data" | jq -r '.state')
+
+        # Get full log and show new lines
+        local logs
+        logs=$(curl -sf "${AUTOTEST_API}/tests/${test_id}/logs" 2>/dev/null || echo "")
+        if [[ -n "$logs" ]]; then
+            local cur_len
+            cur_len=$(printf '%s' "$logs" | wc -c)
+            if [[ $cur_len -gt $prev_len ]]; then
+                printf '%s' "$logs" | tail -c +$((prev_len + 1))
+                prev_len=$cur_len
+            fi
+        fi
+
+        # Check terminal states
+        case "$state" in
+            SUCCESS)
+                echo -e "\n${GREEN}Test passed!${NC}"
+                break ;;
+            FAILURE|ERROR)
+                echo -e "\n${RED}Test failed: ${state}${NC}"
+                break ;;
+            CANCELLED)
+                echo -e "\n${YELLOW}Test cancelled${NC}"
+                break ;;
+        esac
+        sleep 2
+    done
 }
 
 test_cancel() {
@@ -599,6 +638,91 @@ batch_summary() {
     curl -s "${AUTOTEST_API}/batches/${batch_id}/summary" 2>/dev/null || err "Failed to fetch batch summary"
 }
 
+batch_watch() {
+    local batch_id="${1:?Usage: ap-build batch watch <batch_id>}"; shift
+    local timeout=600
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --timeout) timeout="${2:?--timeout requires a value}"; shift 2 ;;
+            *) err "Unknown option: $1" ;;
+        esac
+    done
+
+    local deadline=$(( $(date +%s) + timeout ))
+
+    # Track which tests have streamed log output, keyed by test_id -> bytes seen
+    declare -A log_offsets
+
+    while [[ $(date +%s) -lt $deadline ]]; do
+        local data
+        data=$(curl -sf "${AUTOTEST_API}/batches/${batch_id}" 2>/dev/null) || { sleep 2; continue; }
+
+        local total passed failed running cancelled complete
+        total=$(echo "$data" | jq -r '.total')
+        passed=$(echo "$data" | jq -r '.passed')
+        failed=$(echo "$data" | jq -r '.failed')
+        running=$(echo "$data" | jq -r '.running')
+        cancelled=$(echo "$data" | jq -r '.cancelled // 0')
+        complete=$(echo "$data" | jq -r '.complete')
+
+        # Show live log snippets from tests that are actively running
+        local active_ids
+        active_ids=$(echo "$data" | jq -r '.tests[] | select(.state == "TESTING" or .state == "BUILDING") | .test_id')
+        for tid in $active_ids; do
+            local logs
+            logs=$(curl -sf "${AUTOTEST_API}/tests/${tid}/logs" 2>/dev/null || echo "")
+            if [[ -n "$logs" ]]; then
+                local cur_len prev_len
+                cur_len=$(printf '%s' "$logs" | wc -c)
+                prev_len=${log_offsets[$tid]:-0}
+                if [[ $cur_len -gt $prev_len ]]; then
+                    local test_name
+                    test_name=$(echo "$data" | jq -r --arg id "$tid" '.tests[] | select(.test_id == $id) | .test')
+                    # Show last new chunk (up to 5 lines to avoid flood)
+                    local new_text
+                    new_text=$(printf '%s' "$logs" | tail -c +$((prev_len + 1)) | tail -5)
+                    while IFS= read -r line; do
+                        echo -e "${CYAN}[${tid}]${NC} ${line}"
+                    done <<< "$new_text"
+                    log_offsets[$tid]=$cur_len
+                fi
+            fi
+        done
+
+        # Print progress line
+        printf "\r${BOLD}[%d/%d]${NC} ${GREEN}%d passed${NC} ${RED}%d failed${NC} %d running" \
+            $((passed + failed + cancelled)) "$total" "$passed" "$failed" "$running"
+
+        if [[ "$complete" == "true" ]]; then
+            echo ""
+            echo ""
+            echo -e "${BOLD}Batch ${batch_id} complete${NC}"
+            echo -e "  Total:  ${total}"
+            echo -e "  Passed: ${GREEN}${passed}${NC}"
+            echo -e "  Failed: ${RED}${failed}${NC}"
+
+            # Show failed test names
+            local fail_list
+            fail_list=$(echo "$data" | jq -r '.tests[] | select(.state == "FAILURE" or .state == "ERROR") | .test')
+            if [[ -n "$fail_list" ]]; then
+                echo ""
+                echo -e "${RED}Failed tests:${NC}"
+                echo "$fail_list" | while IFS= read -r t; do
+                    echo -e "  ${RED}x${NC} ${t}"
+                done
+            fi
+            return 0
+        fi
+
+        sleep 3
+    done
+
+    echo ""
+    echo -e "${YELLOW}Timeout after ${timeout}s — batch still running (${running} remaining)${NC}"
+    return 1
+}
+
 batch_wait() {
     local batch_id="${1:?Usage: ap-build batch wait <batch_id>}"; shift
     local timeout=600
@@ -672,6 +796,7 @@ case "$cmd" in
         case "$subcmd" in
             submit) test_submit "$@" ;;
             list)   test_list ;;
+            watch)  test_watch "$@" ;;
             status) test_status "$@" ;;
             logs)   test_logs "$@" ;;
             cancel) test_cancel "$@" ;;
@@ -682,6 +807,7 @@ case "$cmd" in
         subcmd="${1:?Usage: ap-build batch <list|status|logs|summary|wait>}"; shift
         case "$subcmd" in
             list)    batch_list ;;
+            watch)   batch_watch "$@" ;;
             status)  batch_status "$@" ;;
             logs)    batch_logs "$@" ;;
             summary) batch_summary "$@" ;;
