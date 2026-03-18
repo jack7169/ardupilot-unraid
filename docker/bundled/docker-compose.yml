@@ -26,6 +26,7 @@ services:
       - autotest-results:/data/autotest-results:rw
       - custombuild-base:/data/custombuild-base:rw
       - builder-workdir:/workdir:rw
+      - shared-ardupilot:/data/shared-ardupilot:rw
       # Log-heavy volumes: bind mount to array (large storage, metadata-light)
       - ardupilot-buildlogs:/data/buildlogs:rw
 
@@ -46,6 +47,7 @@ volumes:
   autotest-results:
   custombuild-base:
   builder-workdir:
+  shared-ardupilot:
   # Bind mount — stored on array (shfs), fine for logs
   ardupilot-buildlogs:
     driver: local

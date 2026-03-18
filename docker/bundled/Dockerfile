@@ -102,6 +102,7 @@ RUN echo 'ardupilot ALL=(root) NOPASSWD: /bin/mount, /bin/umount' > /etc/sudoers
 # Mark data dirs as safe for git (ownership may differ between host and container)
 RUN git config --global --add safe.directory /data/autotest-workdir/ardupilot && \
     git config --global --add safe.directory /data/custombuild-base/ardupilot && \
+    git config --global --add safe.directory /data/shared-ardupilot && \
     git config --global --add safe.directory /workdir/ardupilot
 # Copy global gitconfig to ardupilot user too
 RUN cp /root/.gitconfig /home/ardupilot/.gitconfig && chown ardupilot:ardupilot /home/ardupilot/.gitconfig

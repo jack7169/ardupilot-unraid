@@ -3,6 +3,7 @@ Autotest service — runs ArduPilot SITL tests and exposes results via API.
 Supports concurrent tests using git worktrees for isolation.
 """
 import asyncio
+import fcntl
 import json
 import logging
 import os
@@ -24,7 +25,9 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="ArduPilot Autotest", docs_url="/autotest/api/docs", redoc_url=None)
 
 WORKDIR = Path(os.environ.get("AUTOTEST_WORKDIR", "/workdir"))
-ARDUPILOT_DIR = WORKDIR / "ardupilot"
+# Use shared golden repo if available; fall back to per-service clone
+_shared = os.environ.get("SHARED_ARDUPILOT_DIR")
+ARDUPILOT_DIR = Path(_shared) if _shared else WORKDIR / "ardupilot"
 WORKTREES_DIR = WORKDIR / "worktrees"
 RESULTS_DIR = Path(os.environ.get("AUTOTEST_RESULTS_DIR", "/results"))
 BUILDLOGS_DIR = Path(os.environ.get("BUILDLOGS_DIR", "/buildlogs"))
@@ -336,11 +339,29 @@ async def fetch_remote(remote_name: str, remote_url: str | None = None, ref: str
                     f"Updated remote {remote_name}: {current_url} -> {remote_url}"
                 )
 
-    fetch_cmd = ["git", "fetch", remote_name, "--prune", "--tags"]
+    fetch_cmd = ["git", "fetch", remote_name, "--prune", "--tags",
+                 "--no-recurse-submodules"]
     if ref and len(ref) < 40:
         # Explicitly fetch the target branch to ensure we get latest commits
         fetch_cmd.append(f"+refs/heads/{ref}:refs/remotes/{remote_name}/{ref}")
-    rc, out = await run_cmd(fetch_cmd, cwd=ARDUPILOT_DIR, timeout=300)
+
+    # Cross-process file lock to coordinate with custombuild-builder
+    lock_path = ARDUPILOT_DIR / ".fetch.lock"
+    loop = asyncio.get_event_loop()
+
+    def _locked_fetch():
+        with open(lock_path, "w") as lf:
+            fcntl.flock(lf, fcntl.LOCK_EX)
+            try:
+                result = subprocess.run(
+                    fetch_cmd, cwd=ARDUPILOT_DIR,
+                    capture_output=True, timeout=300,
+                )
+                return result.returncode, (result.stdout + result.stderr).decode(errors="replace")
+            finally:
+                fcntl.flock(lf, fcntl.LOCK_UN)
+
+    rc, out = await loop.run_in_executor(None, _locked_fetch)
     output_lines.append(f"Fetch {remote_name}: {'OK' if rc == 0 else 'FAILED'}")
     if rc != 0:
         output_lines.append(out)
