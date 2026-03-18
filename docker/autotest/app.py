@@ -441,10 +441,17 @@ async def get_or_create_template(commit: str, log_cb=None) -> Path:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, shutil.rmtree, tpl_path, True)
 
+    # Unlock any stale lock and prune missing worktrees before creating
+    await run_cmd(
+        ["git", "worktree", "unlock", str(tpl_path)],
+        cwd=ARDUPILOT_DIR, timeout=10,
+    )
+    await run_cmd(["git", "worktree", "prune"], cwd=ARDUPILOT_DIR, timeout=30)
+
     if log_cb:
         log_cb(f"  Creating worktree at {tpl_path.name}...\n")
     rc, out = await run_cmd(
-        ["git", "worktree", "add", "--detach", str(tpl_path), commit],
+        ["git", "worktree", "add", "--force", "--detach", str(tpl_path), commit],
         cwd=ARDUPILOT_DIR, timeout=120, log_cb=log_cb,
     )
     if rc != 0:
