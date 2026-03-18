@@ -1009,8 +1009,35 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
             await loop.run_in_executor(None, shutil.rmtree, test_buildlogs, True)
 
 
+def _extract_error(t: dict) -> str | None:
+    """Extract a concise error reason from a failed test's log."""
+    if t["state"] not in ("FAILURE", "ERROR"):
+        return None
+    log = t.get("log", "").strip()
+    if not log:
+        return None
+    for line in reversed(log.splitlines()[-30:]):
+        line = line.strip()
+        # Build errors
+        if line.startswith("Build failed:") or line.startswith("Build previously failed:"):
+            return line
+        if line.startswith("BUILD FAILED:"):
+            return line
+        if "Build configure failed:" in line:
+            return line
+        # Compile errors (extract the first error: line)
+        if ": error:" in line:
+            return line
+        # Autotest exceptions
+        if "NotAchievedException" in line or "Exception" in line:
+            return line
+        if "FAILED" in line and "tests:" in line:
+            return line
+    return None
+
+
 def test_summary(t: dict) -> dict:
-    return {
+    summary = {
         "test_id": t["test_id"],
         "batch_id": t.get("batch_id"),
         "vehicle": t["vehicle"],
@@ -1024,6 +1051,10 @@ def test_summary(t: dict) -> dict:
         "created_at": t["created_at"],
         "finished_at": t.get("finished_at"),
     }
+    error = _extract_error(t)
+    if error:
+        summary["error"] = error
+    return summary
 
 
 # --- Discovery API ---
@@ -1315,25 +1346,22 @@ async def batch_summary(batch_id: str):
 
     lines = []
     failures = []
+    error_counts: dict[str, int] = {}  # error -> count (for dedup)
+
     for t in batch_tests:
         test_name = t["test"].split(".")[-1] if "." in t["test"] else t["test"]
         state = t["state"]
         if state == "SUCCESS":
             lines.append(f"  PASS  {test_name}")
         elif state in ("FAILURE", "ERROR"):
-            # Extract failure reason from last few log lines
-            reason = ""
-            log_lines = t.get("log", "").strip().splitlines()
-            for line in reversed(log_lines[-20:]):
-                if "NotAchievedException" in line or "Exception" in line:
-                    reason = line.strip()
-                    break
-                if "FAILED" in line and "tests:" in line:
-                    reason = line.strip()
-                    break
+            reason = _extract_error(t) or ""
             lines.append(f"  FAIL  {test_name}")
             if reason:
-                failures.append({"test": test_name, "test_id": t["test_id"], "reason": reason})
+                error_counts[reason] = error_counts.get(reason, 0) + 1
+                failures.append({
+                    "test": test_name, "test_id": t["test_id"],
+                    "reason": reason,
+                })
         elif state == "CANCELLED":
             lines.append(f"  SKIP  {test_name}")
         else:
@@ -1342,14 +1370,44 @@ async def batch_summary(batch_id: str):
     passed = sum(1 for t in batch_tests if t["state"] == "SUCCESS")
     failed = sum(1 for t in batch_tests if t["state"] in ("FAILURE", "ERROR"))
 
+    # Build the failure details section
+    detail_lines = []
+    if failures:
+        # If a single error accounts for most failures, show it as a
+        # common error instead of repeating it per-test
+        if error_counts:
+            top_error = max(error_counts, key=error_counts.get)
+            top_count = error_counts[top_error]
+            if top_count > 1 and top_count >= len(failures) * 0.5:
+                detail_lines.append(
+                    f"Common error ({top_count}/{len(failures)} tests):\n"
+                    f"  {top_error}"
+                )
+                # Show remaining unique errors
+                unique = [
+                    f for f in failures if f["reason"] != top_error
+                ]
+                if unique:
+                    detail_lines.append("")
+                    detail_lines.append("Other errors:")
+                    for f in unique:
+                        detail_lines.append(
+                            f"  {f['test']} ({f['test_id']}): "
+                            f"{f['reason']}"
+                        )
+            else:
+                for f in failures:
+                    detail_lines.append(
+                        f"  {f['test']} ({f['test_id']}): {f['reason']}"
+                    )
+
     return PlainTextResponse(
         f"Batch {batch_id} — {passed} passed, {failed} failed, "
         f"{still_running} running, {len(batch_tests)} total\n"
         f"Remote: {batch_tests[0]['remote']}/{batch_tests[0]['ref']}\n\n"
         + "\n".join(lines)
-        + ("\n\nFailure details:\n" + "\n".join(
-            f"  {f['test']} ({f['test_id']}): {f['reason']}" for f in failures
-        ) if failures else "")
+        + (("\n\nFailure details:\n" + "\n".join(detail_lines))
+           if detail_lines else "")
         + "\n"
     )
 
