@@ -1057,6 +1057,27 @@ def test_summary(t: dict) -> dict:
     return summary
 
 
+def _error_context(t: dict) -> str:
+    """Format error context: test_id, vehicle/target, remote/ref@commit."""
+    commit = t.get("commit") or ""
+    ref = t.get("ref", "")
+    remote = t.get("remote", "")
+
+    # Try to extract resolved commit from log if not in test metadata
+    if not commit:
+        log = t.get("log", "")
+        for line in log.splitlines():
+            if line.startswith("Using pinned commit:") or \
+               line.startswith("Resolved commit:"):
+                commit = line.split(":")[-1].strip()
+                break
+
+    ref_str = f"{remote}/{ref}"
+    if commit:
+        ref_str += f" @ {commit[:12]}"
+    return f"{t['test_id']} | {t['vehicle']} | {ref_str}"
+
+
 # --- Discovery API ---
 
 @app.get("/autotest/api/vehicles")
@@ -1348,6 +1369,9 @@ async def batch_summary(batch_id: str):
     failures = []
     error_counts: dict[str, int] = {}  # error -> count (for dedup)
 
+    # Track first occurrence of each unique error for context
+    error_first_test: dict[str, dict] = {}  # error -> first test dict
+
     for t in batch_tests:
         test_name = t["test"].split(".")[-1] if "." in t["test"] else t["test"]
         state = t["state"]
@@ -1358,6 +1382,8 @@ async def batch_summary(batch_id: str):
             lines.append(f"  FAIL  {test_name}")
             if reason:
                 error_counts[reason] = error_counts.get(reason, 0) + 1
+                if reason not in error_first_test:
+                    error_first_test[reason] = t
                 failures.append({
                     "test": test_name, "test_id": t["test_id"],
                     "reason": reason,
@@ -1370,19 +1396,19 @@ async def batch_summary(batch_id: str):
     passed = sum(1 for t in batch_tests if t["state"] == "SUCCESS")
     failed = sum(1 for t in batch_tests if t["state"] in ("FAILURE", "ERROR"))
 
-    # Build the failure details section
+    # Build the failure details section with context
     detail_lines = []
     if failures:
-        # If a single error accounts for most failures, show it as a
-        # common error instead of repeating it per-test
         if error_counts:
             top_error = max(error_counts, key=error_counts.get)
             top_count = error_counts[top_error]
             if top_count > 1 and top_count >= len(failures) * 0.5:
+                ctx = _error_context(error_first_test[top_error])
                 detail_lines.append(
-                    f"Common error ({top_count}/{len(failures)} tests):\n"
-                    f"  {top_error}"
+                    f"Common error ({top_count}/{len(failures)} tests):"
                 )
+                detail_lines.append(f"  Source: {ctx}")
+                detail_lines.append(f"  Error:  {top_error}")
                 # Show remaining unique errors
                 unique = [
                     f for f in failures if f["reason"] != top_error
@@ -1391,15 +1417,22 @@ async def batch_summary(batch_id: str):
                     detail_lines.append("")
                     detail_lines.append("Other errors:")
                     for f in unique:
-                        detail_lines.append(
-                            f"  {f['test']} ({f['test_id']}): "
-                            f"{f['reason']}"
+                        ft = next(
+                            (t for t in batch_tests
+                             if t["test_id"] == f["test_id"]), None
                         )
+                        ctx = _error_context(ft) if ft else f["test_id"]
+                        detail_lines.append(f"  {ctx}")
+                        detail_lines.append(f"    {f['reason']}")
             else:
                 for f in failures:
-                    detail_lines.append(
-                        f"  {f['test']} ({f['test_id']}): {f['reason']}"
+                    ft = next(
+                        (t for t in batch_tests
+                         if t["test_id"] == f["test_id"]), None
                     )
+                    ctx = _error_context(ft) if ft else f["test_id"]
+                    detail_lines.append(f"  {ctx}")
+                    detail_lines.append(f"    {f['reason']}")
 
     return PlainTextResponse(
         f"Batch {batch_id} — {passed} passed, {failed} failed, "
