@@ -12,6 +12,10 @@ done
 # Mark shared repo as safe for git
 git config --global --add safe.directory /data/shared-ardupilot
 
+# Ensure ccache dir is writable by ardupilot user
+mkdir -p /home/ardupilot/.cache/ccache
+chown -R ardupilot:ardupilot /home/ardupilot/.cache
+
 # Set default env vars for supervisord %(ENV_*) interpolation
 export CBS_LOG_LEVEL="${CBS_LOG_LEVEL:-INFO}"
 export CBS_BUILD_TIMEOUT_SEC="${CBS_BUILD_TIMEOUT_SEC:-900}"
