@@ -651,8 +651,13 @@ batch_watch() {
 
     local deadline=$(( $(date +%s) + timeout ))
 
-    # Track which tests have streamed log output, keyed by test_id -> bytes seen
-    declare -A log_offsets
+    # Track log byte offsets per test in a temp file (avoids bash 4+ declare -A)
+    local offsets_file
+    offsets_file=$(mktemp)
+    trap "rm -f '$offsets_file'" RETURN
+
+    _get_offset() { grep "^$1 " "$offsets_file" 2>/dev/null | awk '{print $2}' || echo 0; }
+    _set_offset() { grep -v "^$1 " "$offsets_file" > "${offsets_file}.tmp" 2>/dev/null; echo "$1 $2" >> "${offsets_file}.tmp"; mv "${offsets_file}.tmp" "$offsets_file"; }
 
     while [[ $(date +%s) -lt $deadline ]]; do
         local data
@@ -675,17 +680,15 @@ batch_watch() {
             if [[ -n "$logs" ]]; then
                 local cur_len prev_len
                 cur_len=$(printf '%s' "$logs" | wc -c)
-                prev_len=${log_offsets[$tid]:-0}
+                prev_len=$(_get_offset "$tid")
                 if [[ $cur_len -gt $prev_len ]]; then
-                    local test_name
-                    test_name=$(echo "$data" | jq -r --arg id "$tid" '.tests[] | select(.test_id == $id) | .test')
                     # Show last new chunk (up to 5 lines to avoid flood)
                     local new_text
                     new_text=$(printf '%s' "$logs" | tail -c +$((prev_len + 1)) | tail -5)
                     while IFS= read -r line; do
                         echo -e "${CYAN}[${tid}]${NC} ${line}"
                     done <<< "$new_text"
-                    log_offsets[$tid]=$cur_len
+                    _set_offset "$tid" "$cur_len"
                 fi
             fi
         done
@@ -702,14 +705,18 @@ batch_watch() {
             echo -e "  Passed: ${GREEN}${passed}${NC}"
             echo -e "  Failed: ${RED}${failed}${NC}"
 
-            # Show failed test names
-            local fail_list
-            fail_list=$(echo "$data" | jq -r '.tests[] | select(.state == "FAILURE" or .state == "ERROR") | .test')
-            if [[ -n "$fail_list" ]]; then
+            # Show failed test names with errors
+            local fail_data
+            fail_data=$(echo "$data" | jq -r '.tests[] | select(.state == "FAILURE" or .state == "ERROR") | "\(.test)\t\(.error // "")"')
+            if [[ -n "$fail_data" ]]; then
                 echo ""
                 echo -e "${RED}Failed tests:${NC}"
-                echo "$fail_list" | while IFS= read -r t; do
-                    echo -e "  ${RED}x${NC} ${t}"
+                echo "$fail_data" | while IFS=$'\t' read -r tname terror; do
+                    if [[ -n "$terror" ]]; then
+                        echo -e "  ${RED}x${NC} ${tname}: ${terror}"
+                    else
+                        echo -e "  ${RED}x${NC} ${tname}"
+                    fi
                 done
             fi
             return 0
