@@ -63,6 +63,10 @@ build_cache: dict[str, dict] = {}
 BUILD_TEMPLATES_DIR = WORKDIR / "build_templates"
 MAX_CACHED_BUILDS = 10
 
+# Cache of failed build keys to avoid retrying broken builds.
+# Cleared on container restart. Key -> error message.
+_build_failures: dict[str, str] = {}
+
 
 def save_test_metadata(test_info: dict):
     """Persist test metadata to disk as JSON."""
@@ -583,6 +587,13 @@ async def get_or_create_build_template(
     """
     key = build_cache_key(commit, vehicle, waf_configure_args, waf_build_args)
 
+    # Check if this build previously failed (don't retry broken builds)
+    if key in _build_failures:
+        err = _build_failures[key]
+        if log_cb:
+            log_cb(f"Build previously failed ({key[:8]}), skipping retry\n")
+        raise RuntimeError(f"Build previously failed: {err}")
+
     # Double-check cache (another task with same key may have finished first)
     async with _build_cache_guard:
         if key in build_cache and build_cache[key]["path"].exists():
@@ -634,7 +645,9 @@ async def get_or_create_build_template(
     if rc != 0:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, shutil.rmtree, bld_path, True)
-        raise RuntimeError(f"Build configure failed: {out[-200:]}")
+        err_msg = out[-500:]
+        _build_failures[key] = err_msg
+        raise RuntimeError(f"Build configure failed: {err_msg}")
 
     # Build
     cpu_count = os.cpu_count() or 4
@@ -648,7 +661,9 @@ async def get_or_create_build_template(
     if rc != 0:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, shutil.rmtree, bld_path, True)
-        raise RuntimeError(f"Build failed: {out[-200:]}")
+        err_msg = out[-500:]
+        _build_failures[key] = err_msg
+        raise RuntimeError(f"Build failed: {err_msg}")
 
     async with _build_cache_guard:
         build_cache[key] = {"path": bld_path, "last_used": time.time()}

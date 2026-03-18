@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-BASE_URL="${AP_BUILD_URL:-http://192.168.50.45:8000}"
+BASE_URL="${AP_BUILD_URL:-http://100.99.196.120:8000}"
 API="${BASE_URL}/api/v1"
 AUTOTEST_API="${BASE_URL}/autotest/api"
 
