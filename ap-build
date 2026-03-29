@@ -63,6 +63,8 @@ BUILDS:
 
 TESTS:
   ap-build test submit <vehicle> <test1> [test2 ...]  Submit SITL autotest(s)
+    Multiple tests are submitted in a single batch request and run in parallel
+    on the server. The build is shared — only one compile per commit/vehicle.
     --remote <name>                                     Git remote (default: origin)
     --ref <branch|tag|sha>                              Git ref to test (default: master)
     --commit <sha>                                      Pin exact commit SHA (use with --ref)
@@ -328,12 +330,6 @@ test_submit() {
     [[ -z "$vehicle" || ${#test_targets[@]} -eq 0 ]] && \
         err "Usage: ap-build test submit <vehicle> <test1> [test2 ...] [--remote X] [--ref X] [--commit <sha>] [--waf-configure \"flags\"] [--waf-build \"flags\"]"
 
-    # Generate batch ID for multi-test submissions
-    local batch_id=""
-    if [[ ${#test_targets[@]} -gt 1 ]]; then
-        batch_id="batch-$(date +%Y%m%d-%H%M%S)-$(head -c4 /dev/urandom | xxd -p)"
-    fi
-
     # Build waf args arrays
     local configure_args="[]"
     local build_args="[]"
@@ -349,42 +345,48 @@ test_submit() {
     else
         info "Submitting ${#test_targets[@]} test(s) for ${vehicle} @ ${remote}/${ref}"
     fi
-    [[ -n "$batch_id" ]] && info "  Batch: ${batch_id}"
     [[ -n "$waf_configure" ]] && info "  waf configure: ${waf_configure}"
     [[ -n "$waf_build" ]] && info "  waf build: ${waf_build}"
 
-    local -a submitted_ids=()
-    for test_target in "${test_targets[@]}"; do
-        local payload
-        payload=$(jq -n \
-            --arg v "$vehicle" \
-            --arg t "$test_target" \
-            --arg r "$remote" \
-            --arg ref "$ref" \
-            --arg commit "$commit" \
-            --argjson wc "$configure_args" \
-            --argjson wb "$build_args" \
-            --arg bid "$batch_id" \
-            '{vehicle: $v, test: $t, remote: $r, ref: $ref, waf_configure_args: $wc, waf_build_args: $wb} + (if $bid != "" then {batch_id: $bid} else {} end) + (if $commit != "" then {commit: $commit} else {} end)')
-
-        local response
-        response=$(api_post "${AUTOTEST_API}/tests" "$payload")
-
-        local test_id
-        test_id=$(echo "$response" | jq -r '.test_id')
-        submitted_ids+=("$test_id")
-        success "  ${test_target} -> ${test_id}"
+    # Build JSON array of test targets
+    local tests_json="[]"
+    for t in "${test_targets[@]}"; do
+        tests_json=$(echo "$tests_json" | jq --arg t "$t" '. + [$t]')
     done
 
+    # Single batch POST — all tests submitted and launched in parallel server-side
+    local payload
+    payload=$(jq -n \
+        --arg v "$vehicle" \
+        --argjson tests "$tests_json" \
+        --arg r "$remote" \
+        --arg ref "$ref" \
+        --arg commit "$commit" \
+        --argjson wc "$configure_args" \
+        --argjson wb "$build_args" \
+        '{vehicle: $v, tests: $tests, remote: $r, ref: $ref, waf_configure_args: $wc, waf_build_args: $wb} + (if $commit != "" then {commit: $commit} else {} end)')
+
+    local response
+    response=$(api_post "${AUTOTEST_API}/tests/batch" "$payload")
+
+    local batch_id count
+    batch_id=$(echo "$response" | jq -r '.batch_id')
+    count=$(echo "$response" | jq -r '.count')
+
+    # Print submitted test IDs
+    echo "$response" | jq -r '.submitted[] | "  \(.test) -> \(.test_id)"'
+
     echo ""
-    echo -e "${BOLD}${#submitted_ids[@]} test(s) submitted${NC}"
-    if [[ -n "$batch_id" ]]; then
+    echo -e "${BOLD}${count} test(s) submitted${NC}"
+    if [[ $count -gt 1 ]]; then
         echo -e "Batch: ${BOLD}${batch_id}${NC}"
         echo -e "\nWatch progress:"
         echo -e "  ap-build batch watch ${batch_id}"
     else
+        local first_id
+        first_id=$(echo "$response" | jq -r '.submitted[0].test_id')
         echo -e "\nWatch progress:"
-        echo -e "  ap-build test watch ${submitted_ids[0]}"
+        echo -e "  ap-build test watch ${first_id}"
     fi
 }
 

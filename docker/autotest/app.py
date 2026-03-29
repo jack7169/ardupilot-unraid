@@ -206,6 +206,18 @@ class TestRequest(BaseModel):
     batch_id: str | None = None
 
 
+class BatchSubmitRequest(BaseModel):
+    """Submit multiple tests at once as a batch."""
+    vehicle: str = "Plane"
+    tests: list[str]  # e.g. ["test.Plane.Foo", "test.Plane.Bar"]
+    remote: str = "origin"
+    ref: str = "master"
+    commit: str | None = None
+    waf_configure_args: list[str] = []
+    waf_build_args: list[str] = []
+    batch_id: str | None = None  # client can supply; auto-generated if omitted
+
+
 class GitUpdateRequest(BaseModel):
     remote_url: str | None = None
     remote_name: str = "origin"
@@ -1218,6 +1230,50 @@ async def submit_test(req: TestRequest):
     test_info["task"] = task
 
     return {"test_id": test_id, "batch_id": batch_id, "status": "submitted"}
+
+
+@app.post("/autotest/api/tests/batch")
+async def submit_batch(req: BatchSubmitRequest):
+    """Submit multiple tests in a single request. All launch in parallel."""
+    batch_id = req.batch_id or f"batch-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    submitted = []
+    for test_target in req.tests:
+        test_id = f"{req.vehicle.lower()}-{uuid.uuid4().hex[:8]}"
+        test_info = {
+            "test_id": test_id,
+            "batch_id": batch_id,
+            "vehicle": req.vehicle,
+            "test": test_target,
+            "remote": req.remote,
+            "ref": req.ref,
+            "commit": req.commit,
+            "waf_configure_args": req.waf_configure_args,
+            "waf_build_args": req.waf_build_args,
+            "state": "PENDING",
+            "created_at": time.time(),
+            "finished_at": None,
+            "log": "",
+            "_log_flushed_len": 0,
+            "task": None,
+            "process": None,
+            "worktree": None,
+        }
+        tests[test_id] = test_info
+        task = asyncio.create_task(
+            run_test_async(
+                test_id, req.vehicle, test_target, req.remote, req.ref,
+                req.waf_configure_args, req.waf_build_args,
+                commit=req.commit,
+            )
+        )
+        test_info["task"] = task
+        submitted.append({"test_id": test_id, "test": test_target})
+
+    return {
+        "batch_id": batch_id,
+        "submitted": submitted,
+        "count": len(submitted),
+    }
 
 
 @app.get("/autotest/api/tests/{test_id}")
