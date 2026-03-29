@@ -323,6 +323,7 @@ Interactive API docs: [`/autotest/api/docs`](https://jforbes.us/autotest/api/doc
 - **50 concurrent SITL instances** via instance pool with unique port offsets
 - Each instance gets ports at `base + instance_num * 10` to avoid collisions
 - The autotest framework is patched at runtime to match the port offsets
+- All tests run with `--speedup -1` (unlimited speed) — SITL wall-clock sync is fully disabled so tests are deterministic regardless of CPU contention from parallel instances
 
 ### Caching
 
