@@ -143,12 +143,16 @@ ap-build download <build_id> --output firmware.tar.gz
 
 ### Test Commands
 
+All tests are submitted in a single batch request and run **in parallel** on the server.
+The build is shared — only one compile per commit/vehicle combination, regardless of how many
+tests use it.
+
 ```bash
 # Submit a single test
 ap-build test submit Plane test.QuadPlane.GPSDeniedQLoiterExtPos \
     --remote jack7169 --ref feature/extpos-kalman-fusion
 
-# Submit multiple tests (auto-generates batch ID)
+# Submit multiple tests (all run in parallel, auto-generates batch ID)
 ap-build test submit Plane \
     test.QuadPlane.GPSDeniedQLoiterExtPos \
     test.QuadPlane.GPSDeniedVTOLTransitionExtPos \
@@ -161,6 +165,14 @@ ap-build test submit Plane \
     test.QuadPlane.GPSDeniedVTOLTransitionExtPos \
     --remote jack7169 --ref feature/extpos-kalman-fusion \
     --commit 423c00fc139f70eb3c7e52808f4dd3e56a1d016a
+
+# Dynamic test list from grep (space-separated variables are auto-split)
+PLANE_TESTS=$(grep -rh "def ExtPos" Tools/autotest/arduplane.py | \
+    sed 's/.*def //' | sed 's/(self.*//' | sed 's/^/test.Plane./' | tr '\n' ' ')
+QP_TESTS=$(grep -rh "def QPExtPos" Tools/autotest/quadplane.py | \
+    sed 's/.*def //' | sed 's/(self.*//' | sed 's/^/test.QuadPlane./' | tr '\n' ' ')
+ap-build test submit Plane $PLANE_TESTS $QP_TESTS \
+    --remote jack7169 --ref my-branch --commit $(git rev-parse HEAD)
 
 # Extra waf flags
 ap-build test submit Plane test.Plane.MainFlight \
@@ -176,7 +188,7 @@ ap-build test cancel <test_id>
 
 ### Batch Commands
 
-When submitting multiple tests, a batch ID is auto-generated (e.g., `batch-20260316-041500-a3f2`).
+When submitting multiple tests, a batch ID is auto-generated. The Web UI groups batch tests under a collapsible header showing pass/fail counts — click to expand individual test rows.
 
 ```bash
 # Submit a batch (2+ tests auto-generates a batch ID)
@@ -264,7 +276,8 @@ ap-build batch summary batch-20260316-...
 | `GET` | `/autotest/api/vehicles` | List testable vehicles |
 | `GET` | `/autotest/api/subtests?vehicle=Plane` | List available subtests |
 | `GET` | `/autotest/api/test-suites` | List top-level test suites |
-| `POST` | `/autotest/api/tests` | Submit test |
+| `POST` | `/autotest/api/tests` | Submit single test |
+| `POST` | `/autotest/api/tests/batch` | Submit multiple tests in parallel |
 | `GET` | `/autotest/api/tests` | List tests (`?batch_id=`, `?limit=`) |
 | `GET` | `/autotest/api/tests/{id}` | Test details |
 | `GET` | `/autotest/api/tests/{id}/logs` | Test logs (`?tail=N`) |
@@ -313,14 +326,16 @@ Interactive API docs: [`/autotest/api/docs`](https://jforbes.us/autotest/api/doc
 
 ### Caching
 
-Two-layer cache eliminates redundant work when running batched tests:
+Three-layer shared cache eliminates redundant work across all services:
 
-| Layer | Key | What it caches | Effect |
-|-------|-----|---------------|--------|
-| **Source template** | Commit SHA | Git checkout + submodules | Skip `git fetch` + `submodule update` |
-| **Build template** | Commit + vehicle + waf args | Compiled SITL binary | Skip `waf configure` + `waf build` |
+| Layer | Key | What it caches | Shared by |
+|-------|-----|---------------|-----------|
+| **Golden repo** | Single clone | Full ArduPilot git repo | custombuild + autotest |
+| **Source template** | Commit SHA | Git worktree + submodules | All builds for same commit |
+| **Build template** | Commit + vehicle + waf args | Compiled binary | All tests/builds for same config |
 
-For a batch of 20 tests against the same branch: only 1 fetch and 1 build, then 20 instant copies.
+For a batch of 87 tests against the same branch: 1 fetch, 1 build, then 87 instant copies.
+Both custombuild and autotest share the golden repo at `/data/shared-ardupilot`, avoiding duplicate GitHub clones.
 
 ### Test Lifecycle
 
