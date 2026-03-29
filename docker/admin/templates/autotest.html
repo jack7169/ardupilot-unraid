@@ -140,7 +140,7 @@
                     <button class="btn btn-sm btn-outline-secondary" id="toggleColBtn" onclick="toggleGroupCol()" title="Toggle between Remote/Ref and Batch ID">
                         <i class="bi bi-arrow-left-right me-1"></i><span id="toggleColLabel">Batch ID</span>
                     </button>
-                    <select class="form-select form-select-sm" id="perPage" style="width: auto;" onchange="currentPage=0; fetchTests();">
+                    <select class="form-select form-select-sm" id="perPage" style="width: auto;" onchange="currentPage=0; renderPage();">
                         <option value="20" selected>20 / page</option>
                         <option value="50">50 / page</option>
                         <option value="100">100 / page</option>
@@ -284,34 +284,60 @@
         }
 
         // --- Tests ---
+        // Fetch all tests, then paginate client-side by display rows
+        // (each batch = 1 row, each standalone test = 1 row)
+        let allTests = [];
+
         async function fetchTests() {
             try {
-                const perPage = parseInt(document.getElementById('perPage').value);
-                let url = `${API}/tests`;
-                if (perPage > 0) {
-                    const offset = currentPage * perPage;
-                    url += `?limit=${perPage}&offset=${offset}`;
-                }
-                const resp = await fetch(url);
-                const tests = await resp.json();
-                // Get total from header or status endpoint
-                const totalHeader = resp.headers.get('X-Total-Count');
-                if (totalHeader) {
-                    totalTests = parseInt(totalHeader);
-                } else if (perPage > 0 && tests.length < perPage && currentPage === 0) {
-                    totalTests = tests.length;
-                }
-                renderTests(tests);
-                updatePagination(perPage);
+                const resp = await fetch(`${API}/tests?limit=0`);
+                allTests = await resp.json();
+                renderPage();
             } catch (e) {
                 document.getElementById('tests-body').innerHTML =
                     '<tr><td colspan="8" class="text-center text-danger">Failed to load tests</td></tr>';
             }
         }
 
-        function updatePagination(perPage) {
+        function buildDisplayItems(tests) {
+            // Group into display items: each batch = 1 item, standalone = 1 item
+            const batches = {};
+            const standalone = [];
+            tests.forEach(t => {
+                if (t.batch_id) {
+                    if (!batches[t.batch_id]) batches[t.batch_id] = { batch_id: t.batch_id, tests: [], created_at: t.created_at };
+                    batches[t.batch_id].tests.push(t);
+                    batches[t.batch_id].created_at = Math.min(batches[t.batch_id].created_at, t.created_at);
+                } else {
+                    standalone.push({ batch_id: null, tests: [t], created_at: t.created_at });
+                }
+            });
+            // Merge and sort by created_at descending
+            const items = Object.values(batches).concat(standalone);
+            items.sort((a, b) => b.created_at - a.created_at);
+            return items;
+        }
+
+        function renderPage() {
+            const perPage = parseInt(document.getElementById('perPage').value);
+            const items = buildDisplayItems(allTests);
+            const totalItems = items.length;
+
+            let pageItems;
+            if (perPage > 0) {
+                const start = currentPage * perPage;
+                pageItems = items.slice(start, start + perPage);
+            } else {
+                pageItems = items;
+            }
+
+            renderDisplayItems(pageItems, allTests.length);
+            updatePagination(perPage, totalItems);
+        }
+
+        function updatePagination(perPage, totalItems) {
             const footer = document.getElementById('pagination-footer');
-            if (perPage === 0 || totalTests <= perPage) {
+            if (perPage === 0 || totalItems <= perPage) {
                 footer.style.display = 'none';
                 footer.classList.add('d-none');
                 return;
@@ -319,16 +345,16 @@
             footer.style.display = '';
             footer.classList.remove('d-none');
             footer.style.setProperty('display', 'flex', 'important');
-            const totalPages = Math.ceil(totalTests / perPage);
+            const totalPages = Math.ceil(totalItems / perPage);
             document.getElementById('prevBtn').disabled = currentPage <= 0;
             document.getElementById('nextBtn').disabled = currentPage >= totalPages - 1;
-            document.getElementById('pageInfo').textContent = `Page ${currentPage + 1} of ${totalPages} (${totalTests} total)`;
+            document.getElementById('pageInfo').textContent = `Page ${currentPage + 1} of ${totalPages} (${totalItems} items)`;
         }
 
         function changePage(delta) {
             currentPage += delta;
             if (currentPage < 0) currentPage = 0;
-            fetchTests();
+            renderPage();
         }
 
         function fmtTime(ts) {
@@ -345,117 +371,95 @@
         }
 
         let showBatchCol = false;
-        let lastTests = [];
 
         function toggleGroupCol() {
             showBatchCol = !showBatchCol;
             document.getElementById('groupColHeader').textContent = showBatchCol ? 'Batch ID' : 'Remote / Ref';
             document.getElementById('toggleColLabel').textContent = showBatchCol ? 'Remote / Ref' : 'Batch ID';
-            renderTests(lastTests);
+            renderPage();
         }
 
-        function renderTests(tests) {
-            lastTests = tests;
+        function renderDisplayItems(items, totalTestCount) {
             const tbody = document.getElementById('tests-body');
-            document.getElementById('test-count').textContent = `${tests.length} test(s)`;
+            document.getElementById('test-count').textContent = `${totalTestCount} test(s)`;
 
-            if (tests.length === 0) {
+            if (items.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">No tests yet. Submit one above.</td></tr>';
                 return;
             }
 
-            // Group by batch: batched tests get a collapsible header row
-            const batches = {};
-            const standalone = [];
-            tests.forEach(t => {
-                if (t.batch_id) {
-                    if (!batches[t.batch_id]) batches[t.batch_id] = [];
-                    batches[t.batch_id].push(t);
-                } else {
-                    standalone.push(t);
-                }
-            });
-
-            // Render order: batches first (by earliest created_at), then standalone
-            const batchEntries = Object.entries(batches).sort((a, b) => {
-                const aMin = Math.min(...a[1].map(t => t.created_at));
-                const bMin = Math.min(...b[1].map(t => t.created_at));
-                return bMin - aMin;
-            });
-
             let html = '';
+            for (const item of items) {
+                if (item.batch_id) {
+                    // Batch row
+                    const batchTests = item.tests;
+                    const passed = batchTests.filter(t => t.state === 'SUCCESS').length;
+                    const failed = batchTests.filter(t => ['FAILURE','ERROR'].includes(t.state)).length;
+                    const running = batchTests.filter(t => ['PENDING','UPDATING','BUILDING','QUEUED','TESTING'].includes(t.state)).length;
+                    const total = batchTests.length;
+                    const first = batchTests[0];
+                    const batchState = running > 0 ? 'TESTING' : (failed > 0 ? 'FAILURE' : 'SUCCESS');
+                    const shortBatch = item.batch_id.length > 24 ? item.batch_id.slice(0, 24) + '...' : item.batch_id;
+                    const safeClass = `batch-${item.batch_id.replace(/[^a-zA-Z0-9]/g,'_')}`;
 
-            for (const [batchId, batchTests] of batchEntries) {
-                const passed = batchTests.filter(t => t.state === 'SUCCESS').length;
-                const failed = batchTests.filter(t => ['FAILURE','ERROR'].includes(t.state)).length;
-                const running = batchTests.filter(t => ['PENDING','UPDATING','BUILDING','QUEUED','TESTING'].includes(t.state)).length;
-                const total = batchTests.length;
-                const first = batchTests[0];
-                const allDone = running === 0;
-                const batchState = running > 0 ? 'TESTING' : (failed > 0 ? 'FAILURE' : 'SUCCESS');
-                const shortBatch = batchId.length > 24 ? batchId.slice(0, 24) + '...' : batchId;
+                    html += `<tr class="table-light" style="cursor:pointer" onclick="document.querySelectorAll('.${safeClass}').forEach(r=>r.classList.toggle('d-none'))">
+                        <td><i class="bi bi-chevron-right me-1"></i><code class="small">${esc(shortBatch)}</code></td>
+                        <td>${esc(first.vehicle)}</td>
+                        <td class="small"><strong>${total} tests</strong> &mdash;
+                            <span class="text-success">${passed} pass</span>,
+                            <span class="text-danger">${failed} fail</span>${running > 0 ? `, <span class="text-primary">${running} running</span>` : ''}</td>
+                        <td>${remoteRefLink(first.remote, first.ref)}</td>
+                        <td class="small text-muted">${fmtTime(first.created_at)}</td>
+                        <td class="small text-muted"></td>
+                        <td><span class="badge state-badge state-${batchState}">${batchState}</span></td>
+                        <td></td>
+                    </tr>`;
 
-                // Batch header row (clickable to expand)
-                html += `<tr class="table-light" style="cursor:pointer" onclick="document.querySelectorAll('.batch-${batchId.replace(/[^a-zA-Z0-9]/g,'_')}').forEach(r=>r.classList.toggle('d-none'))">
-                    <td><i class="bi bi-chevron-right me-1 batch-chevron"></i><code class="small">${esc(shortBatch)}</code></td>
-                    <td>${esc(first.vehicle)}</td>
-                    <td class="small"><strong>${total} tests</strong> &mdash;
-                        <span class="text-success">${passed} pass</span>,
-                        <span class="text-danger">${failed} fail</span>${running > 0 ? `, <span class="text-primary">${running} running</span>` : ''}</td>
-                    <td>${remoteRefLink(first.remote, first.ref)}</td>
-                    <td class="small text-muted">${fmtTime(first.created_at)}</td>
-                    <td class="small text-muted"></td>
-                    <td><span class="badge state-badge state-${batchState}">${batchState}</span></td>
-                    <td></td>
-                </tr>`;
-
-                // Individual test rows (hidden by default)
-                const safeClass = `batch-${batchId.replace(/[^a-zA-Z0-9]/g,'_')}`;
-                for (const t of batchTests) {
+                    for (const t of batchTests) {
+                        const isRunning = ['PENDING', 'UPDATING', 'BUILDING', 'QUEUED', 'TESTING'].includes(t.state);
+                        html += `<tr class="${safeClass} d-none">
+                            <td class="ps-4"><code class="small text-muted">${esc(t.test_id)}</code></td>
+                            <td></td>
+                            <td><code class="small">${esc(t.test)}</code></td>
+                            <td></td>
+                            <td class="small text-muted">${fmtTime(t.created_at)}</td>
+                            <td class="small text-muted">${fmtDuration(t.created_at, t.finished_at)}</td>
+                            <td><span class="badge state-badge state-${t.state}">${t.state}</span></td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-primary me-1" onclick="event.stopPropagation(); showLogs('${esc(t.test_id)}')">
+                                    <i class="bi bi-file-text"></i>
+                                </button>
+                                ${isRunning ? `<button class="btn btn-sm btn-outline-danger" onclick="event.stopPropagation(); cancelTest('${esc(t.test_id)}')">
+                                    <i class="bi bi-x-circle"></i>
+                                </button>` : ''}
+                            </td>
+                        </tr>`;
+                    }
+                } else {
+                    // Standalone test
+                    const t = item.tests[0];
                     const isRunning = ['PENDING', 'UPDATING', 'BUILDING', 'QUEUED', 'TESTING'].includes(t.state);
-                    html += `<tr class="${safeClass} d-none">
-                        <td class="ps-4"><code class="small text-muted">${esc(t.test_id)}</code></td>
-                        <td></td>
+                    const groupCol = showBatchCol
+                        ? '<span class="text-muted">-</span>'
+                        : remoteRefLink(t.remote, t.ref);
+                    html += `<tr>
+                        <td><code class="small">${esc(t.test_id)}</code></td>
+                        <td>${esc(t.vehicle)}</td>
                         <td><code class="small">${esc(t.test)}</code></td>
-                        <td></td>
+                        <td>${groupCol}</td>
                         <td class="small text-muted">${fmtTime(t.created_at)}</td>
                         <td class="small text-muted">${fmtDuration(t.created_at, t.finished_at)}</td>
                         <td><span class="badge state-badge state-${t.state}">${t.state}</span></td>
                         <td>
-                            <button class="btn btn-sm btn-outline-primary me-1" onclick="event.stopPropagation(); showLogs('${esc(t.test_id)}')">
+                            <button class="btn btn-sm btn-outline-primary me-1" onclick="showLogs('${esc(t.test_id)}')">
                                 <i class="bi bi-file-text"></i>
                             </button>
-                            ${isRunning ? `<button class="btn btn-sm btn-outline-danger" onclick="event.stopPropagation(); cancelTest('${esc(t.test_id)}')">
+                            ${isRunning ? `<button class="btn btn-sm btn-outline-danger" onclick="cancelTest('${esc(t.test_id)}')">
                                 <i class="bi bi-x-circle"></i>
                             </button>` : ''}
                         </td>
                     </tr>`;
                 }
-            }
-
-            // Standalone tests (not part of a batch)
-            for (const t of standalone) {
-                const isRunning = ['PENDING', 'UPDATING', 'BUILDING', 'QUEUED', 'TESTING'].includes(t.state);
-                const groupCol = showBatchCol
-                    ? '<span class="text-muted">-</span>'
-                    : remoteRefLink(t.remote, t.ref);
-                html += `<tr>
-                    <td><code class="small">${esc(t.test_id)}</code></td>
-                    <td>${esc(t.vehicle)}</td>
-                    <td><code class="small">${esc(t.test)}</code></td>
-                    <td>${groupCol}</td>
-                    <td class="small text-muted">${fmtTime(t.created_at)}</td>
-                    <td class="small text-muted">${fmtDuration(t.created_at, t.finished_at)}</td>
-                    <td><span class="badge state-badge state-${t.state}">${t.state}</span></td>
-                    <td>
-                        <button class="btn btn-sm btn-outline-primary me-1" onclick="showLogs('${esc(t.test_id)}')">
-                            <i class="bi bi-file-text"></i>
-                        </button>
-                        ${isRunning ? `<button class="btn btn-sm btn-outline-danger" onclick="cancelTest('${esc(t.test_id)}')">
-                            <i class="bi bi-x-circle"></i>
-                        </button>` : ''}
-                    </td>
-                </tr>`;
             }
 
             tbody.innerHTML = html;
