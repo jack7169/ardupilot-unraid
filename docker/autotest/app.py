@@ -970,14 +970,15 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
 
             run_env = test_env
 
-            # --speedup -1: unlimited speed, disables wall-clock sync in
-            # SITL entirely.  Prevents CPU contention from causing flaky
-            # test failures when many instances run in parallel — the sim
-            # never sleeps between frames, so sim-time waits remain
-            # deterministic regardless of host load.
+            # --speedup 100: high enough that SITL never sleeps between
+            # frames (target rate far exceeds achievable rate).  Prevents
+            # CPU contention from causing flaky failures when many
+            # instances run in parallel.  Using a positive value ensures
+            # compatibility with all ArduPilot branches (negative values
+            # require a custom SIM_Aircraft.cpp patch).
             proc = await asyncio.create_subprocess_exec(
                 "python3", "Tools/autotest/autotest.py",
-                "--speedup", "-1",
+                "--speedup", "100",
                 test_target,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,

@@ -653,7 +653,7 @@ batch_summary() {
 
 batch_watch() {
     local batch_id="${1:?Usage: ap-build batch watch <batch_id>}"; shift
-    local timeout=600
+    local timeout=3600
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -663,51 +663,53 @@ batch_watch() {
     done
 
     local deadline=$(( $(date +%s) + timeout ))
-
-    # Track log byte offsets per test in a temp file (avoids bash 4+ declare -A)
-    local offsets_file
-    offsets_file=$(mktemp)
-    trap "rm -f '$offsets_file'" RETURN
-
-    _get_offset() { grep "^$1 " "$offsets_file" 2>/dev/null | awk '{print $2}' || echo 0; }
-    _set_offset() { grep -v "^$1 " "$offsets_file" > "${offsets_file}.tmp" 2>/dev/null; echo "$1 $2" >> "${offsets_file}.tmp"; mv "${offsets_file}.tmp" "$offsets_file"; }
+    local prev_passed=0 prev_failed=0 prev_building=""
 
     while [[ $(date +%s) -lt $deadline ]]; do
         local data
-        data=$(curl -sf "${AUTOTEST_API}/batches/${batch_id}" 2>/dev/null) || { sleep 2; continue; }
+        data=$(curl -s --max-time 10 "${AUTOTEST_API}/batches/${batch_id}" 2>/dev/null) || { sleep 2; continue; }
 
         local total passed failed running cancelled complete
-        total=$(echo "$data" | jq -r '.total')
-        passed=$(echo "$data" | jq -r '.passed')
-        failed=$(echo "$data" | jq -r '.failed')
-        running=$(echo "$data" | jq -r '.running')
+        total=$(echo "$data" | jq -r '.total // 0')
+        passed=$(echo "$data" | jq -r '.passed // 0')
+        failed=$(echo "$data" | jq -r '.failed // 0')
+        running=$(echo "$data" | jq -r '.running // 0')
         cancelled=$(echo "$data" | jq -r '.cancelled // 0')
-        complete=$(echo "$data" | jq -r '.complete')
+        complete=$(echo "$data" | jq -r '.complete // false')
 
-        # Show live log snippets from tests that are actively running
-        local active_ids
-        active_ids=$(echo "$data" | jq -r '.tests[] | select(.state == "TESTING" or .state == "BUILDING") | .test_id')
-        for tid in $active_ids; do
-            local logs
-            logs=$(curl -sf "${AUTOTEST_API}/tests/${tid}/logs" 2>/dev/null || echo "")
-            if [[ -n "$logs" ]]; then
-                local cur_len prev_len
-                cur_len=$(printf '%s' "$logs" | wc -c)
-                prev_len=$(_get_offset "$tid")
-                if [[ $cur_len -gt $prev_len ]]; then
-                    # Show last new chunk (up to 5 lines to avoid flood)
-                    local new_text
-                    new_text=$(printf '%s' "$logs" | tail -c +$((prev_len + 1)) | tail -5)
-                    while IFS= read -r line; do
-                        echo -e "${CYAN}[${tid}]${NC} ${line}"
-                    done <<< "$new_text"
-                    _set_offset "$tid" "$cur_len"
-                fi
-            fi
-        done
+        # Show state transitions (new passes/failures since last poll)
+        if [[ $passed -gt $prev_passed ]]; then
+            local new_passes
+            new_passes=$(echo "$data" | jq -r '[.tests[] | select(.state == "SUCCESS")] | sort_by(.test) | .[-'"$((passed - prev_passed))"':] | .[].test' 2>/dev/null)
+            for t in $new_passes; do
+                local short_name="${t##*.}"
+                echo -e "  ${GREEN}PASS${NC} ${short_name}"
+            done
+        fi
+        if [[ $failed -gt $prev_failed ]]; then
+            local new_fails
+            new_fails=$(echo "$data" | jq -r '[.tests[] | select(.state == "FAILURE" or .state == "ERROR")] | sort_by(.test) | .[-'"$((failed - prev_failed))"':] | .[].test' 2>/dev/null)
+            for t in $new_fails; do
+                local short_name="${t##*.}"
+                echo -e "  ${RED}FAIL${NC} ${short_name}"
+            done
+        fi
+        prev_passed=$passed
+        prev_failed=$failed
 
-        # Print progress line
-        printf "\r${BOLD}[%d/%d]${NC} ${GREEN}%d passed${NC} ${RED}%d failed${NC} %d running" \
+        # Show build phase once (fetch logs from first BUILDING test only)
+        local cur_building
+        cur_building=$(echo "$data" | jq -r '[.tests[] | select(.state == "BUILDING")] | length')
+        if [[ "$cur_building" -gt 0 && "$prev_building" != "building" ]]; then
+            echo -e "${CYAN}Building SITL binary (shared across all ${total} tests)...${NC}"
+            prev_building="building"
+        elif [[ "$cur_building" -eq 0 && "$prev_building" == "building" ]]; then
+            echo -e "${CYAN}Build complete, tests running${NC}"
+            prev_building="done"
+        fi
+
+        # Progress line
+        printf "\r${BOLD}[%d/%d]${NC} ${GREEN}%d pass${NC} ${RED}%d fail${NC} %d running  " \
             $((passed + failed + cancelled)) "$total" "$passed" "$failed" "$running"
 
         if [[ "$complete" == "true" ]]; then
@@ -718,24 +720,18 @@ batch_watch() {
             echo -e "  Passed: ${GREEN}${passed}${NC}"
             echo -e "  Failed: ${RED}${failed}${NC}"
 
-            # Show failed test names with errors
-            local fail_data
-            fail_data=$(echo "$data" | jq -r '.tests[] | select(.state == "FAILURE" or .state == "ERROR") | "\(.test)\t\(.error // "")"')
-            if [[ -n "$fail_data" ]]; then
+            if [[ $failed -gt 0 ]]; then
                 echo ""
                 echo -e "${RED}Failed tests:${NC}"
-                echo "$fail_data" | while IFS=$'\t' read -r tname terror; do
-                    if [[ -n "$terror" ]]; then
-                        echo -e "  ${RED}x${NC} ${tname}: ${terror}"
-                    else
-                        echo -e "  ${RED}x${NC} ${tname}"
-                    fi
+                echo "$data" | jq -r '.tests[] | select(.state == "FAILURE" or .state == "ERROR") | .test' | while read -r tname; do
+                    local short_name="${tname##*.}"
+                    echo -e "  ${RED}x${NC} ${short_name}"
                 done
             fi
             return 0
         fi
 
-        sleep 3
+        sleep 5
     done
 
     echo ""
