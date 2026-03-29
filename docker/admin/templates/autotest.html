@@ -364,12 +364,82 @@
                 return;
             }
 
-            tbody.innerHTML = tests.map(t => {
+            // Group by batch: batched tests get a collapsible header row
+            const batches = {};
+            const standalone = [];
+            tests.forEach(t => {
+                if (t.batch_id) {
+                    if (!batches[t.batch_id]) batches[t.batch_id] = [];
+                    batches[t.batch_id].push(t);
+                } else {
+                    standalone.push(t);
+                }
+            });
+
+            // Render order: batches first (by earliest created_at), then standalone
+            const batchEntries = Object.entries(batches).sort((a, b) => {
+                const aMin = Math.min(...a[1].map(t => t.created_at));
+                const bMin = Math.min(...b[1].map(t => t.created_at));
+                return bMin - aMin;
+            });
+
+            let html = '';
+
+            for (const [batchId, batchTests] of batchEntries) {
+                const passed = batchTests.filter(t => t.state === 'SUCCESS').length;
+                const failed = batchTests.filter(t => ['FAILURE','ERROR'].includes(t.state)).length;
+                const running = batchTests.filter(t => ['PENDING','UPDATING','BUILDING','QUEUED','TESTING'].includes(t.state)).length;
+                const total = batchTests.length;
+                const first = batchTests[0];
+                const allDone = running === 0;
+                const batchState = running > 0 ? 'TESTING' : (failed > 0 ? 'FAILURE' : 'SUCCESS');
+                const shortBatch = batchId.length > 24 ? batchId.slice(0, 24) + '...' : batchId;
+
+                // Batch header row (clickable to expand)
+                html += `<tr class="table-light" style="cursor:pointer" onclick="document.querySelectorAll('.batch-${batchId.replace(/[^a-zA-Z0-9]/g,'_')}').forEach(r=>r.classList.toggle('d-none'))">
+                    <td><i class="bi bi-chevron-right me-1 batch-chevron"></i><code class="small">${esc(shortBatch)}</code></td>
+                    <td>${esc(first.vehicle)}</td>
+                    <td class="small"><strong>${total} tests</strong> &mdash;
+                        <span class="text-success">${passed} pass</span>,
+                        <span class="text-danger">${failed} fail</span>${running > 0 ? `, <span class="text-primary">${running} running</span>` : ''}</td>
+                    <td>${remoteRefLink(first.remote, first.ref)}</td>
+                    <td class="small text-muted">${fmtTime(first.created_at)}</td>
+                    <td class="small text-muted"></td>
+                    <td><span class="badge state-badge state-${batchState}">${batchState}</span></td>
+                    <td></td>
+                </tr>`;
+
+                // Individual test rows (hidden by default)
+                const safeClass = `batch-${batchId.replace(/[^a-zA-Z0-9]/g,'_')}`;
+                for (const t of batchTests) {
+                    const isRunning = ['PENDING', 'UPDATING', 'BUILDING', 'QUEUED', 'TESTING'].includes(t.state);
+                    html += `<tr class="${safeClass} d-none">
+                        <td class="ps-4"><code class="small text-muted">${esc(t.test_id)}</code></td>
+                        <td></td>
+                        <td><code class="small">${esc(t.test)}</code></td>
+                        <td></td>
+                        <td class="small text-muted">${fmtTime(t.created_at)}</td>
+                        <td class="small text-muted">${fmtDuration(t.created_at, t.finished_at)}</td>
+                        <td><span class="badge state-badge state-${t.state}">${t.state}</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary me-1" onclick="event.stopPropagation(); showLogs('${esc(t.test_id)}')">
+                                <i class="bi bi-file-text"></i>
+                            </button>
+                            ${isRunning ? `<button class="btn btn-sm btn-outline-danger" onclick="event.stopPropagation(); cancelTest('${esc(t.test_id)}')">
+                                <i class="bi bi-x-circle"></i>
+                            </button>` : ''}
+                        </td>
+                    </tr>`;
+                }
+            }
+
+            // Standalone tests (not part of a batch)
+            for (const t of standalone) {
                 const isRunning = ['PENDING', 'UPDATING', 'BUILDING', 'QUEUED', 'TESTING'].includes(t.state);
                 const groupCol = showBatchCol
-                    ? (t.batch_id ? `<code class="small">${esc(t.batch_id)}</code>` : '<span class="text-muted">-</span>')
+                    ? '<span class="text-muted">-</span>'
                     : remoteRefLink(t.remote, t.ref);
-                return `<tr>
+                html += `<tr>
                     <td><code class="small">${esc(t.test_id)}</code></td>
                     <td>${esc(t.vehicle)}</td>
                     <td><code class="small">${esc(t.test)}</code></td>
@@ -386,7 +456,9 @@
                         </button>` : ''}
                     </td>
                 </tr>`;
-            }).join('');
+            }
+
+            tbody.innerHTML = html;
         }
 
         // --- GitHub links ---
@@ -515,29 +587,29 @@
             const wafConfigureArgs = wafCfg ? wafCfg.split(/\s+/).filter(Boolean) : [];
             const wafBuildArgs = wafBld ? wafBld.split(/\s+/).filter(Boolean) : [];
 
-            let submitted = 0;
-            for (const target of testTargets) {
-                const body = { vehicle, test: target, remote, ref, waf_configure_args: wafConfigureArgs, waf_build_args: wafBuildArgs };
-                try {
-                    const resp = await fetch(`${API}/tests`, {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify(body),
-                    });
-                    if (resp.ok) submitted++;
-                    else {
-                        const err = await resp.json();
-                        alert(`Failed to submit ${target}: ${err.detail || 'Unknown error'}`);
-                    }
-                } catch (e) {
-                    alert(`Failed to submit ${target}: ${e.message}`);
+            // Single batch request — all tests launch in parallel server-side
+            const body = {
+                vehicle, tests: testTargets, remote, ref,
+                waf_configure_args: wafConfigureArgs,
+                waf_build_args: wafBuildArgs,
+            };
+            try {
+                const resp = await fetch(`${API}/tests/batch`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body),
+                });
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    alert(`Failed to submit: ${err.detail || 'Unknown error'}`);
+                    return;
                 }
-            }
-
-            if (submitted > 0) {
-                alert(`${submitted} test(s) submitted`);
+                const data = await resp.json();
+                alert(`${data.count} test(s) submitted (batch: ${data.batch_id})`);
                 fetchTests();
                 fetchStatus();
+            } catch (e) {
+                alert(`Failed to submit: ${e.message}`);
             }
         }
 

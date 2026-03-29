@@ -327,6 +327,17 @@ test_submit() {
         esac
     done
 
+    # Re-split any targets that contain spaces (handles $VAR expansion
+    # where a variable like PLANE_TESTS="test.A test.B test.C" is passed
+    # as a single argument)
+    local -a split_targets=()
+    for t in "${test_targets[@]}"; do
+        for word in $t; do
+            split_targets+=("$word")
+        done
+    done
+    test_targets=("${split_targets[@]}")
+
     [[ -z "$vehicle" || ${#test_targets[@]} -eq 0 ]] && \
         err "Usage: ap-build test submit <vehicle> <test1> [test2 ...] [--remote X] [--ref X] [--commit <sha>] [--waf-configure \"flags\"] [--waf-build \"flags\"]"
 
