@@ -970,8 +970,15 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
 
             run_env = test_env
 
+            # --speedup 500: remove sim-to-wallclock throttle so SITL
+            # runs flat-out.  This prevents CPU contention from causing
+            # flaky test failures when many instances run in parallel —
+            # the sim never sleeps between frames, so sim-time waits
+            # remain deterministic regardless of host load.
             proc = await asyncio.create_subprocess_exec(
-                "python3", "Tools/autotest/autotest.py", test_target,
+                "python3", "Tools/autotest/autotest.py",
+                "--speedup", "500",
+                test_target,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=wt_path,
