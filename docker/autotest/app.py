@@ -969,13 +969,15 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
                 util_path.write_text(util_src)
 
             run_env = test_env
+            # Deterministic mode: disable SITL wall-clock sync and seed
+            # RNG so tests produce identical results regardless of CPU
+            # load or parallel instance count.
+            run_env["SIM_DETERMINISTIC"] = "1"
+            run_env["SIM_RNG_SEED"] = "42"
 
-            # --speedup 100: high enough that SITL never sleeps between
-            # frames (target rate far exceeds achievable rate).  Prevents
-            # CPU contention from causing flaky failures when many
-            # instances run in parallel.  Using a positive value ensures
-            # compatibility with all ArduPilot branches (negative values
-            # require a custom SIM_Aircraft.cpp patch).
+            # --speedup 100: belt-and-suspenders for branches without
+            # the SIM_DETERMINISTIC patch.  High enough that SITL never
+            # sleeps between frames.
             proc = await asyncio.create_subprocess_exec(
                 "python3", "Tools/autotest/autotest.py",
                 "--speedup", "100",
