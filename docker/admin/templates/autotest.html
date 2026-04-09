@@ -370,6 +370,17 @@
             return `${Math.floor(elapsed/3600)}h ${Math.floor((elapsed%3600)/60)}m`;
         }
 
+        function batchDuration(batchTests) {
+            const starts = batchTests.map(t => t.created_at).filter(Boolean);
+            const ends = batchTests.map(t => t.finished_at).filter(Boolean);
+            if (starts.length === 0) return '-';
+            const earliest = Math.min(...starts);
+            const running = batchTests.some(t => ['PENDING','UPDATING','BUILDING','QUEUED','TESTING'].includes(t.state));
+            const latest = running ? Date.now()/1000 : (ends.length > 0 ? Math.max(...ends) : null);
+            if (!latest) return '-';
+            return fmtDuration(earliest, latest);
+        }
+
         // Track which batches are expanded so re-renders preserve state
         const expandedBatches = new Set();
 
@@ -416,11 +427,16 @@
                             <span class="text-danger">${failed} fail</span>${cancelled > 0 ? `, <span class="text-secondary">${cancelled} cancelled</span>` : ''}${running > 0 ? `, <span class="text-primary">${running} running</span>` : ''}</td>
                         <td>${remoteRefLink(first.remote, first.ref)}</td>
                         <td class="small text-muted">${fmtTime(first.created_at)}</td>
-                        <td class="small text-muted"></td>
+                        <td class="small text-muted">${batchDuration(batchTests)}</td>
                         <td><span class="badge state-badge state-${batchState}">${batchState}</span></td>
-                        <td>${running > 0 ? `<button class="btn btn-sm btn-outline-danger" onclick="event.stopPropagation(); cancelBatch('${esc(item.batch_id)}')">
-                            <i class="bi bi-x-circle me-1"></i>Cancel All
-                        </button>` : ''}</td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary me-1" onclick="event.stopPropagation(); showBatchLogs('${esc(item.batch_id)}')">
+                                <i class="bi bi-file-text"></i>
+                            </button>
+                            ${running > 0 ? `<button class="btn btn-sm btn-outline-danger" onclick="event.stopPropagation(); cancelBatch('${esc(item.batch_id)}')">
+                                <i class="bi bi-x-circle me-1"></i>Cancel All
+                            </button>` : ''}
+                        </td>
                     </tr>`;
 
                     for (const t of batchTests) {
@@ -665,6 +681,59 @@
         }
 
         // --- Logs Modal ---
+        function showBatchLogs(batchId) {
+            document.getElementById('logModalLabel').textContent = `Batch Summary: ${batchId}`;
+            document.getElementById('logTextArea').value = 'Loading...';
+            new bootstrap.Modal(document.getElementById('logModal')).show();
+
+            async function pollBatchLogs() {
+                try {
+                    // Fetch summary, details, and logs in parallel
+                    const [summaryResp, detailResp, logsResp] = await Promise.all([
+                        fetch(`${API}/batches/${batchId}/summary`),
+                        fetch(`${API}/batches/${batchId}`),
+                        fetch(`${API}/batches/${batchId}/logs`),
+                    ]);
+                    const summary = await summaryResp.text();
+                    const detail = await detailResp.json();
+                    const logsData = await logsResp.json();
+
+                    // Extract the build section from the first test's log (up to "=== Running:")
+                    let buildLog = '';
+                    if (logsData.tests && logsData.tests.length > 0) {
+                        const firstLog = logsData.tests[0].log || '';
+                        const runIdx = firstLog.indexOf('=== Running:');
+                        if (runIdx > 0) {
+                            buildLog = firstLog.substring(0, runIdx).trim();
+                        } else if (firstLog.includes('=== Copying')) {
+                            buildLog = firstLog.trim();
+                        }
+                    }
+
+                    // Build per-test duration table
+                    let durationTable = '\nTest Results:\n' + '-'.repeat(70) + '\n';
+                    for (const t of detail.tests) {
+                        const name = t.test.split('.').pop();
+                        const dur = t.finished_at && t.created_at
+                            ? `${Math.round(t.finished_at - t.created_at)}s`
+                            : (t.created_at ? 'running...' : '-');
+                        const state = t.state.padEnd(10);
+                        durationTable += `  ${state} ${name.padEnd(40)} ${dur}\n`;
+                    }
+
+                    const ta = document.getElementById('logTextArea');
+                    ta.value = (buildLog ? buildLog + '\n\n' + '='.repeat(70) + '\n\n' : '')
+                        + summary + '\n' + durationTable;
+                    if (document.getElementById('autoScrollSwitch').checked) {
+                        ta.scrollTop = ta.scrollHeight;
+                    }
+                } catch (e) { /* ignore */ }
+            }
+
+            pollBatchLogs();
+            logPollInterval = setInterval(pollBatchLogs, 3000);
+        }
+
         function showLogs(testId) {
             document.getElementById('logModalLabel').textContent = `Test Log: ${testId}`;
             document.getElementById('logTextArea').value = 'Loading...';
