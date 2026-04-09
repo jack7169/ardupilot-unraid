@@ -379,7 +379,7 @@ async def fetch_remote(remote_name: str, remote_url: str | None = None, ref: str
                     f"Updated remote {remote_name}: {current_url} -> {remote_url}"
                 )
 
-    fetch_cmd = ["git", "fetch", remote_name, "--prune", "--tags",
+    fetch_cmd = ["git", "fetch", remote_name, "--prune", "--force", "--tags",
                  "--no-recurse-submodules"]
     if ref and len(ref) < 40:
         # Explicitly fetch the target branch to ensure we get latest commits
