@@ -430,13 +430,12 @@
                             batchState = passed === 0 && cancelled > 0 ? 'CANCELLED' : 'SUCCESS';
                         }
                     }
-                    const shortBatch = item.batch_id.length > 24 ? item.batch_id.slice(0, 24) + '...' : item.batch_id;
                     const safeClass = `batch-${item.batch_id.replace(/[^a-zA-Z0-9]/g,'_')}`;
 
                     const isExpanded = expandedBatches.has(item.batch_id);
 
                     html += `<tr class="table-light" style="cursor:pointer" onclick="toggleBatch('${esc(item.batch_id)}', '${safeClass}')">
-                        <td><i class="bi bi-chevron-${isExpanded ? 'down' : 'right'} me-1"></i><code class="small">${esc(shortBatch)}</code></td>
+                        <td><i class="bi bi-chevron-${isExpanded ? 'down' : 'right'} me-1"></i><code class="small" title="${esc(item.batch_id)}">${esc(item.batch_id)}</code></td>
                         <td>${esc(first.vehicle)}</td>
                         <td class="small"><strong>${total} tests</strong> &mdash;
                             <span class="text-success">${passed} pass</span>,
