@@ -1337,6 +1337,7 @@ async def list_batches():
             batches[bid] = {
                 "batch_id": bid,
                 "total": 0, "passed": 0, "failed": 0, "running": 0,
+                "cancelled": 0,
                 "vehicle": t["vehicle"], "remote": t["remote"], "ref": t["ref"],
                 "created_at": t["created_at"],
             }
@@ -1346,6 +1347,8 @@ async def list_batches():
             b["passed"] += 1
         elif t["state"] in ("FAILURE", "ERROR"):
             b["failed"] += 1
+        elif t["state"] == "CANCELLED":
+            b["cancelled"] += 1
         elif t["state"] in ("PENDING", "UPDATING", "BUILDING", "QUEUED", "TESTING"):
             b["running"] += 1
         b["created_at"] = min(b["created_at"], t["created_at"])
@@ -1377,6 +1380,29 @@ async def get_batch(batch_id: str):
         "cancelled": cancelled,
         "tests": batch_tests,
     }
+
+
+@app.post("/autotest/api/batches/{batch_id}/cancel")
+async def cancel_batch(batch_id: str):
+    """Cancel all running tests in a batch."""
+    batch_tests = [t for t in tests.values() if t.get("batch_id") == batch_id]
+    if not batch_tests:
+        raise HTTPException(404, f"Batch '{batch_id}' not found")
+    running_states = ("PENDING", "UPDATING", "BUILDING", "QUEUED", "TESTING")
+    cancelled_count = 0
+    for t in batch_tests:
+        if t["state"] not in running_states:
+            continue
+        proc = t.get("process")
+        if proc:
+            proc.kill()
+        task = t.get("task")
+        if task and not task.done():
+            task.cancel()
+        t["state"] = "CANCELLED"
+        t["finished_at"] = time.time()
+        cancelled_count += 1
+    return {"status": "cancelled", "cancelled_count": cancelled_count}
 
 
 @app.get("/autotest/api/batches/{batch_id}/wait")

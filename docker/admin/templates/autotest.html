@@ -370,6 +370,9 @@
             return `${Math.floor(elapsed/3600)}h ${Math.floor((elapsed%3600)/60)}m`;
         }
 
+        // Track which batches are expanded so re-renders preserve state
+        const expandedBatches = new Set();
+
         let showBatchCol = false;
 
         function toggleGroupCol() {
@@ -395,29 +398,34 @@
                     const batchTests = item.tests;
                     const passed = batchTests.filter(t => t.state === 'SUCCESS').length;
                     const failed = batchTests.filter(t => ['FAILURE','ERROR'].includes(t.state)).length;
+                    const cancelled = batchTests.filter(t => t.state === 'CANCELLED').length;
                     const running = batchTests.filter(t => ['PENDING','UPDATING','BUILDING','QUEUED','TESTING'].includes(t.state)).length;
                     const total = batchTests.length;
                     const first = batchTests[0];
-                    const batchState = running > 0 ? 'TESTING' : (failed > 0 ? 'FAILURE' : 'SUCCESS');
+                    const batchState = running > 0 ? 'TESTING' : (failed > 0 ? 'FAILURE' : (passed === 0 && cancelled > 0 ? 'CANCELLED' : 'SUCCESS'));
                     const shortBatch = item.batch_id.length > 24 ? item.batch_id.slice(0, 24) + '...' : item.batch_id;
                     const safeClass = `batch-${item.batch_id.replace(/[^a-zA-Z0-9]/g,'_')}`;
 
-                    html += `<tr class="table-light" style="cursor:pointer" onclick="document.querySelectorAll('.${safeClass}').forEach(r=>r.classList.toggle('d-none'))">
-                        <td><i class="bi bi-chevron-right me-1"></i><code class="small">${esc(shortBatch)}</code></td>
+                    const isExpanded = expandedBatches.has(item.batch_id);
+
+                    html += `<tr class="table-light" style="cursor:pointer" onclick="toggleBatch('${esc(item.batch_id)}', '${safeClass}')">
+                        <td><i class="bi bi-chevron-${isExpanded ? 'down' : 'right'} me-1"></i><code class="small">${esc(shortBatch)}</code></td>
                         <td>${esc(first.vehicle)}</td>
                         <td class="small"><strong>${total} tests</strong> &mdash;
                             <span class="text-success">${passed} pass</span>,
-                            <span class="text-danger">${failed} fail</span>${running > 0 ? `, <span class="text-primary">${running} running</span>` : ''}</td>
+                            <span class="text-danger">${failed} fail</span>${cancelled > 0 ? `, <span class="text-secondary">${cancelled} cancelled</span>` : ''}${running > 0 ? `, <span class="text-primary">${running} running</span>` : ''}</td>
                         <td>${remoteRefLink(first.remote, first.ref)}</td>
                         <td class="small text-muted">${fmtTime(first.created_at)}</td>
                         <td class="small text-muted"></td>
                         <td><span class="badge state-badge state-${batchState}">${batchState}</span></td>
-                        <td></td>
+                        <td>${running > 0 ? `<button class="btn btn-sm btn-outline-danger" onclick="event.stopPropagation(); cancelBatch('${esc(item.batch_id)}')">
+                            <i class="bi bi-x-circle me-1"></i>Cancel All
+                        </button>` : ''}</td>
                     </tr>`;
 
                     for (const t of batchTests) {
                         const isRunning = ['PENDING', 'UPDATING', 'BUILDING', 'QUEUED', 'TESTING'].includes(t.state);
-                        html += `<tr class="${safeClass} d-none">
+                        html += `<tr class="${safeClass}${isExpanded ? '' : ' d-none'}">
                             <td class="ps-4"><code class="small text-muted">${esc(t.test_id)}</code></td>
                             <td></td>
                             <td><code class="small">${esc(t.test)}</code></td>
@@ -617,6 +625,22 @@
             }
         }
 
+        function toggleBatch(batchId, safeClass) {
+            if (expandedBatches.has(batchId)) {
+                expandedBatches.delete(batchId);
+            } else {
+                expandedBatches.add(batchId);
+            }
+            document.querySelectorAll(`.${safeClass}`).forEach(r => r.classList.toggle('d-none'));
+            // Update chevron icon on the batch row
+            const batchRow = event.currentTarget;
+            const icon = batchRow.querySelector('i.bi');
+            if (icon) {
+                icon.classList.toggle('bi-chevron-right');
+                icon.classList.toggle('bi-chevron-down');
+            }
+        }
+
         async function cancelTest(testId) {
             if (!confirm(`Cancel test ${testId}?`)) return;
             try {
@@ -625,6 +649,18 @@
                 fetchStatus();
             } catch (e) {
                 alert('Failed to cancel: ' + e.message);
+            }
+        }
+
+        async function cancelBatch(batchId) {
+            if (!confirm(`Cancel all running tests in batch ${batchId}?`)) return;
+            try {
+                const resp = await fetch(`${API}/batches/${batchId}/cancel`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}' });
+                const data = await resp.json();
+                fetchTests();
+                fetchStatus();
+            } catch (e) {
+                alert('Failed to cancel batch: ' + e.message);
             }
         }
 
