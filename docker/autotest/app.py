@@ -7,6 +7,7 @@ import fcntl
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -1125,20 +1126,24 @@ async def list_test_vehicles():
     return {"vehicles": sorted(vehicles)}
 
 
-@app.get("/autotest/api/subtests")
-async def list_subtests(vehicle: str = "Plane"):
-    """List available subtests for a vehicle."""
+async def _get_subtests(vehicle: str) -> list[str]:
+    """Get subtest names for a vehicle. Returns empty list on failure."""
     if not (ARDUPILOT_DIR / "waf").exists():
-        return {"subtests": []}
+        return []
     rc, out = await run_cmd(
         ["python3", "Tools/autotest/autotest.py",
          f"--list-subtests-for-vehicle={vehicle}"],
         cwd=ARDUPILOT_DIR, timeout=30,
     )
     if rc != 0:
-        return {"subtests": []}
-    # Output is space-separated on one line
-    names = [n.strip() for n in out.strip().split() if n.strip()]
+        return []
+    return [n.strip() for n in out.strip().split() if n.strip()]
+
+
+@app.get("/autotest/api/subtests")
+async def list_subtests(vehicle: str = "Plane"):
+    """List available subtests for a vehicle."""
+    names = await _get_subtests(vehicle)
     return {"subtests": [{"name": n} for n in sorted(names)]}
 
 
@@ -1242,12 +1247,40 @@ async def submit_test(req: TestRequest):
     return {"test_id": test_id, "batch_id": batch_id, "status": "submitted"}
 
 
+def _is_suite_target(target: str) -> str | None:
+    """If target is a suite like 'test.Plane' or 'test.QuadPlane', return the vehicle name.
+    Returns None for specific tests like 'test.Plane.ThrottleFailsafe'."""
+    m = re.match(r'^test\.([A-Za-z]+)$', target)
+    return m.group(1) if m else None
+
+
 @app.post("/autotest/api/tests/batch")
 async def submit_batch(req: BatchSubmitRequest):
-    """Submit multiple tests in a single request. All launch in parallel."""
+    """Submit multiple tests in a single request. All launch in parallel.
+    Suite targets (e.g. 'test.Plane') are expanded into individual subtests."""
     batch_id = req.batch_id or f"batch-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+
+    # Expand suite targets into individual subtests
+    expanded_tests = []
+    for target in req.tests:
+        suite_vehicle = _is_suite_target(target)
+        if suite_vehicle:
+            subtests = await _get_subtests(suite_vehicle)
+            if subtests:
+                expanded_tests.extend(
+                    f"test.{suite_vehicle}.{name}" for name in subtests
+                )
+                logger.info(
+                    "Expanded %s into %d subtests", target, len(subtests)
+                )
+            else:
+                # Couldn't expand — pass through as-is
+                expanded_tests.append(target)
+        else:
+            expanded_tests.append(target)
+
     submitted = []
-    for test_target in req.tests:
+    for test_target in expanded_tests:
         test_id = f"{req.vehicle.lower()}-{uuid.uuid4().hex[:8]}"
         test_info = {
             "test_id": test_id,
