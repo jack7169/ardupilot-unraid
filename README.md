@@ -94,7 +94,7 @@ Both `ardupilot-jack` and `custombuild` are included as git submodules.
 
 ## CLI Tool (`ap-build`)
 
-A full-featured command-line interface for builds, tests, git management, and batch operations. Every action taken via CLI appears on the web dashboard.
+A full-featured command-line interface for builds, tests, git management, and batch operations. Every command sends HTTP requests to the remote server's REST API — it does **not** interact with your local git repo. Every action taken via CLI appears on the web dashboard.
 
 ### Installation
 
@@ -114,6 +114,7 @@ Requires `curl` and `jq`.
 |----------|---------|-------------|
 | `AP_BUILD_URL` | `http://192.168.50.45:8000` | Server base URL |
 
+For Tailscale: `AP_BUILD_URL=http://100.99.196.120:8000`
 For public access: `AP_BUILD_URL=https://jforbes.us`
 
 ### Build Commands
@@ -146,6 +147,39 @@ ap-build download <build_id> --output firmware.tar.gz
 All tests are submitted in a single batch request and run **in parallel** on the server.
 The build is shared — only one compile per commit/vehicle combination, regardless of how many
 tests use it.
+
+#### Test Name Format
+
+Tests use ArduPilot's autotest.py naming convention: `test.<Vehicle>.<TestName>`
+
+| Format | Example | Description |
+|--------|---------|-------------|
+| `test.<Vehicle>.<TestName>` | `test.Plane.ThrottleFailsafe` | Run a specific subtest |
+| `test.<Vehicle>` | `test.QuadPlane` | Run ALL tests for a vehicle |
+| `ALL` | `ALL` | Run all tests for the specified vehicle |
+
+#### Vehicle Parameter
+
+The first positional argument is the vehicle type, which determines which SITL binary gets compiled:
+
+| Vehicle | Binary Built | Test prefix |
+|---------|-------------|-------------|
+| `Plane` | `arduplane` | `test.Plane.*` |
+| `Copter` | `arducopter` | `test.Copter.*` |
+| `QuadPlane` | `arduplane` | `test.QuadPlane.*` |
+| `Rover` | `ardurover` | `test.Rover.*` |
+| `Sub` | `ardusub` | `test.Sub.*` |
+
+Do **not** mix vehicles in a single batch — a batch with vehicle `Plane` only builds `arduplane`, and any `test.Copter.*` tests will fail with "Binary does not exist".
+
+#### Remote and Ref
+
+The `--remote` and `--ref` flags reference the **server's** git remotes, not your local repo:
+
+- `--remote origin` = upstream ArduPilot (`https://github.com/ardupilot/ardupilot.git`)
+- `--remote jack7169` = fork (`https://github.com/jack7169/ardupilot-jack.git`)
+
+If a branch only exists on a fork, you **must** specify `--remote <fork-name>`. Using `--remote origin` (the default) for a fork branch will fail with "couldn't find remote ref".
 
 ```bash
 # Submit a single test
@@ -215,12 +249,20 @@ ap-build batch wait <batch_id> --timeout 1200  # Custom timeout
 
 ### Git Management
 
+These commands manage the git repo **inside the server's Docker container**, not your local repo.
+
 ```bash
 ap-build git remotes                            # List configured remotes
 ap-build git branches --remote jack7169         # List remote branches
 ap-build git tags --remote jack7169             # List tags
 ap-build git add-remote myremote https://github.com/user/ardupilot.git
 ap-build git update --remote jack7169 --ref feature/extpos-kalman-fusion
+```
+
+The server starts with only `origin` (upstream ArduPilot). To test branches from forks, add the fork as a remote first:
+
+```bash
+ap-build git add-remote jack7169 https://github.com/jack7169/ardupilot-jack.git
 ```
 
 ### Example Workflow
@@ -451,6 +493,39 @@ git submodule update
 # Rebuild and restart
 cd docker/bundled
 docker-compose up -d --build
+```
+
+#### Recovery After Backup Restore
+
+When Docker volumes are lost (server restore, volume wipe, etc.), the container starts fresh:
+
+1. **Docker image** must be rebuilt (`docker build` + `docker-compose up -d`)
+2. **ArduPilot repos** auto-clone on startup (~10-15 min with submodules) — wait for `repo_exists: true` in `/autotest/api/status`
+3. **Git remotes** reset to only `origin` (upstream ArduPilot) — re-add fork remotes:
+   ```bash
+   ap-build git add-remote jack7169 https://github.com/jack7169/ardupilot-jack.git
+   ```
+4. **Build caches** are empty — first build per vehicle takes ~30s
+5. **Buildlogs** on bind mount (`/mnt/user/appdata/ardupilot/buildlogs`) survive if the array was backed up
+6. **SSH key to GitHub** on the server may be missing — generate a new one and add it to GitHub:
+   ```bash
+   ssh root@<server-ip>
+   ssh-keygen -t ed25519 -C 'carthagenas-unraid' -f ~/.ssh/id_ed25519 -N ''
+   cat ~/.ssh/id_ed25519.pub  # Add to GitHub Settings > SSH Keys
+   ssh-keyscan github.com >> ~/.ssh/known_hosts
+   ```
+
+Post-restore smoke test:
+```bash
+# 1. Verify API is up
+curl http://<server-ip>:8000/autotest/api/status
+# Wait until repo_exists: true
+
+# 2. Re-add fork remote
+ap-build git add-remote jack7169 https://github.com/jack7169/ardupilot-jack.git
+
+# 3. Run a smoke test
+ap-build test submit Plane test.Plane.ThrottleFailsafe
 ```
 
 #### Monitoring
