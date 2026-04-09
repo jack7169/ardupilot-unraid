@@ -423,7 +423,12 @@
                         else if (states.includes('UPDATING')) batchState = 'UPDATING';
                         else batchState = 'PENDING';
                     } else {
-                        batchState = failed > 0 ? 'FAILURE' : (passed === 0 && cancelled > 0 ? 'CANCELLED' : 'SUCCESS');
+                        if (failed > 0) {
+                            const hasFailure = batchTests.some(t => t.state === 'FAILURE');
+                            batchState = hasFailure ? 'FAILURE' : 'ERROR';
+                        } else {
+                            batchState = passed === 0 && cancelled > 0 ? 'CANCELLED' : 'SUCCESS';
+                        }
                     }
                     const shortBatch = item.batch_id.length > 24 ? item.batch_id.slice(0, 24) + '...' : item.batch_id;
                     const safeClass = `batch-${item.batch_id.replace(/[^a-zA-Z0-9]/g,'_')}`;
