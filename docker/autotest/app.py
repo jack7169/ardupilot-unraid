@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import time
+import traceback
 import uuid
 from pathlib import Path
 
@@ -898,7 +899,9 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
                     )
                 except RuntimeError as e:
                     _set_state(test_info, "FAILURE")
-                    test_info["log"] += f"\n{e}\n"
+                    test_info["log"] += f"\nBuild error: {e}\n"
+                    test_info["finished_at"] = time.time()
+                    await flush_log(test_info)
                     return
 
         # Fast copy from pre-built template — no git or build ops
@@ -1041,6 +1044,7 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
     except Exception as e:
         _set_state(test_info, "ERROR")
         test_info["log"] += f"\nUnexpected error: {e}\n"
+        test_info["log"] += traceback.format_exc() + "\n"
         logger.exception("Test runner error")
     finally:
         test_info["process"] = None
