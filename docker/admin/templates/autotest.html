@@ -413,7 +413,18 @@
                     const running = batchTests.filter(t => ['PENDING','UPDATING','BUILDING','QUEUED','TESTING'].includes(t.state)).length;
                     const total = batchTests.length;
                     const first = batchTests[0];
-                    const batchState = running > 0 ? 'TESTING' : (failed > 0 ? 'FAILURE' : (passed === 0 && cancelled > 0 ? 'CANCELLED' : 'SUCCESS'));
+                    let batchState;
+                    if (running > 0) {
+                        // Show the most advanced in-progress state
+                        const states = batchTests.map(t => t.state);
+                        if (states.includes('TESTING')) batchState = 'TESTING';
+                        else if (states.includes('QUEUED')) batchState = 'QUEUED';
+                        else if (states.includes('BUILDING')) batchState = 'BUILDING';
+                        else if (states.includes('UPDATING')) batchState = 'UPDATING';
+                        else batchState = 'PENDING';
+                    } else {
+                        batchState = failed > 0 ? 'FAILURE' : (passed === 0 && cancelled > 0 ? 'CANCELLED' : 'SUCCESS');
+                    }
                     const shortBatch = item.batch_id.length > 24 ? item.batch_id.slice(0, 24) + '...' : item.batch_id;
                     const safeClass = `batch-${item.batch_id.replace(/[^a-zA-Z0-9]/g,'_')}`;
 
