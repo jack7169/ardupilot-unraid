@@ -442,7 +442,7 @@
                             <span class="text-danger">${failed} fail</span>${cancelled > 0 ? `, <span class="text-secondary">${cancelled} cancelled</span>` : ''}${running > 0 ? `, <span class="text-primary">${running} running</span>` : ''}</td>
                         <td>${remoteRefLink(first.remote, first.ref)}</td>
                         <td class="small text-muted">${fmtTime(first.created_at)}</td>
-                        <td class="small text-muted">${batchDuration(batchTests)}</td>
+                        <td class="small text-muted live-duration" ${running > 0 ? `data-start="${Math.min(...batchTests.map(t=>t.created_at).filter(Boolean))}"` : ''}>${batchDuration(batchTests)}</td>
                         <td><span class="badge state-badge state-${batchState}">${batchState}</span></td>
                         <td>
                             <button class="btn btn-sm btn-outline-primary me-1" onclick="event.stopPropagation(); showBatchLogs('${esc(item.batch_id)}')">
@@ -462,7 +462,7 @@
                             <td><code class="small">${esc(t.test)}</code></td>
                             <td></td>
                             <td class="small text-muted">${fmtTime(t.created_at)}</td>
-                            <td class="small text-muted">${fmtDuration(t.created_at, t.finished_at)}</td>
+                            <td class="small text-muted live-duration" ${isRunning && t.created_at ? `data-start="${t.created_at}"` : ''}>${fmtDuration(t.created_at, t.finished_at)}</td>
                             <td><span class="badge state-badge state-${t.state}">${t.state}</span></td>
                             <td>
                                 <button class="btn btn-sm btn-outline-primary me-1" onclick="event.stopPropagation(); showLogs('${esc(t.test_id)}')">
@@ -487,7 +487,7 @@
                         <td><code class="small">${esc(t.test)}</code></td>
                         <td>${groupCol}</td>
                         <td class="small text-muted">${fmtTime(t.created_at)}</td>
-                        <td class="small text-muted">${fmtDuration(t.created_at, t.finished_at)}</td>
+                        <td class="small text-muted live-duration" ${isRunning && t.created_at ? `data-start="${t.created_at}"` : ''}>${fmtDuration(t.created_at, t.finished_at)}</td>
                         <td><span class="badge state-badge state-${t.state}">${t.state}</span></td>
                         <td>
                             <button class="btn btn-sm btn-outline-primary me-1" onclick="showLogs('${esc(t.test_id)}')">
@@ -849,6 +849,14 @@
                 output.textContent = 'Failed: ' + e.message;
             }
         }
+
+        // --- Live duration timer ---
+        setInterval(() => {
+            document.querySelectorAll('.live-duration[data-start]').forEach(el => {
+                const start = parseFloat(el.dataset.start);
+                if (start) el.textContent = fmtDuration(start, null);
+            });
+        }, 1000);
 
         // --- Server-Sent Events for instant UI updates ---
         function connectSSE() {
