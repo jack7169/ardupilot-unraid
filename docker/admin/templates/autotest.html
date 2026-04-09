@@ -17,6 +17,32 @@
         .state-CANCELLED { background-color: #6c757d !important; }
         .status-idle { color: #28a745; }
         .status-busy { color: #0d6efd; }
+
+        /* Resizable table columns */
+        #tests-table { table-layout: fixed; width: 100%; }
+        #tests-table th, #tests-table td {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        #tests-table th {
+            position: relative;
+            user-select: none;
+        }
+        .col-resize-handle {
+            position: absolute;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            width: 5px;
+            cursor: col-resize;
+            z-index: 1;
+        }
+        .col-resize-handle:hover,
+        .col-resize-handle.active {
+            background: #0d6efd;
+            opacity: 0.4;
+        }
     </style>
     <style>
         @keyframes metrics-pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
@@ -150,17 +176,17 @@
             </div>
             <div class="card-body p-0">
                 <div class="table-responsive">
-                    <table class="table table-hover mb-0">
+                    <table class="table table-hover mb-0" id="tests-table">
                         <thead class="table-light">
                             <tr>
-                                <th>Test ID</th>
-                                <th>Vehicle</th>
-                                <th>Test Target</th>
-                                <th id="groupColHeader">Remote / Ref</th>
-                                <th>Started</th>
-                                <th>Duration</th>
-                                <th>State</th>
-                                <th>Actions</th>
+                                <th style="width:22%">Test ID</th>
+                                <th style="width:7%">Vehicle</th>
+                                <th style="width:22%">Test Target</th>
+                                <th style="width:15%" id="groupColHeader">Remote / Ref</th>
+                                <th style="width:12%">Started</th>
+                                <th style="width:8%">Duration</th>
+                                <th style="width:7%">State</th>
+                                <th style="width:7%">Actions</th>
                             </tr>
                         </thead>
                         <tbody id="tests-body">
@@ -849,6 +875,47 @@
                 output.textContent = 'Failed: ' + e.message;
             }
         }
+
+        // --- Resizable columns ---
+        (function() {
+            const table = document.getElementById('tests-table');
+            const cols = table.querySelectorAll('thead th');
+            cols.forEach((th, i) => {
+                if (i === cols.length - 1) return; // skip last column
+                const handle = document.createElement('div');
+                handle.className = 'col-resize-handle';
+                th.appendChild(handle);
+
+                let startX, startW, nextStartW, nextTh;
+
+                handle.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    startX = e.pageX;
+                    startW = th.offsetWidth;
+                    nextTh = cols[i + 1];
+                    nextStartW = nextTh.offsetWidth;
+                    handle.classList.add('active');
+
+                    function onMouseMove(e) {
+                        const dx = e.pageX - startX;
+                        const newW = Math.max(40, startW + dx);
+                        const newNextW = Math.max(40, nextStartW - dx);
+                        th.style.width = newW + 'px';
+                        nextTh.style.width = newNextW + 'px';
+                    }
+
+                    function onMouseUp() {
+                        handle.classList.remove('active');
+                        document.removeEventListener('mousemove', onMouseMove);
+                        document.removeEventListener('mouseup', onMouseUp);
+                    }
+
+                    document.addEventListener('mousemove', onMouseMove);
+                    document.addEventListener('mouseup', onMouseUp);
+                });
+            });
+        })();
 
         // --- Live duration timer ---
         setInterval(() => {
