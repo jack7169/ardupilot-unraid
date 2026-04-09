@@ -19,19 +19,17 @@
         .status-busy { color: #0d6efd; }
 
         /* Resizable table columns */
-        #tests-table { table-layout: fixed; width: 100%; }
+        #tests-table { table-layout: fixed; width: 100%; border-collapse: collapse; }
         #tests-table th, #tests-table td {
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+            box-sizing: border-box;
+            padding: 0.5rem;
         }
         #tests-table th {
             position: relative;
             user-select: none;
-            box-sizing: border-box;
-        }
-        #tests-table td {
-            box-sizing: border-box;
         }
         .col-resize-handle {
             position: absolute;
@@ -183,16 +181,26 @@
             <div class="card-body p-0">
                 <div class="table-responsive">
                     <table class="table table-hover mb-0" id="tests-table">
+                        <colgroup>
+                            <col style="width:22%">
+                            <col style="width:7%">
+                            <col style="width:13%">
+                            <col style="width:15%">
+                            <col style="width:12%">
+                            <col style="width:8%">
+                            <col style="width:7%">
+                            <col style="width:16%">
+                        </colgroup>
                         <thead class="table-light">
                             <tr>
-                                <th style="width:22%">Test ID</th>
-                                <th style="width:7%">Vehicle</th>
-                                <th style="width:13%">Test Target</th>
-                                <th style="width:15%" id="groupColHeader">Remote / Ref</th>
-                                <th style="width:12%">Started</th>
-                                <th style="width:8%">Duration</th>
-                                <th style="width:7%">State</th>
-                                <th style="width:7%">Actions</th>
+                                <th>Test ID</th>
+                                <th>Vehicle</th>
+                                <th>Test Target</th>
+                                <th id="groupColHeader">Remote / Ref</th>
+                                <th>Started</th>
+                                <th>Duration</th>
+                                <th>State</th>
+                                <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody id="tests-body">
@@ -885,34 +893,31 @@
         // --- Resizable columns ---
         (function() {
             const table = document.getElementById('tests-table');
-            const cols = table.querySelectorAll('thead th');
+            const headers = table.querySelectorAll('thead th');
+            const colEls = table.querySelectorAll('colgroup col');
 
-            // Convert percentage widths to pixels immediately so first drag doesn't snap
-            cols.forEach(th => { th.style.width = th.offsetWidth + 'px'; });
-
-            cols.forEach((th, i) => {
-                if (i === cols.length - 1) return; // skip last column
+            headers.forEach((th, i) => {
+                if (i === headers.length - 1) return; // skip last column
                 const handle = document.createElement('div');
                 handle.className = 'col-resize-handle';
                 th.appendChild(handle);
 
-                let startX, startW, nextStartW, nextTh;
+                let startX, startW, nextStartW;
 
                 handle.addEventListener('mousedown', (e) => {
                     e.preventDefault();
                     e.stopPropagation();
                     startX = e.pageX;
-                    startW = th.offsetWidth;
-                    nextTh = cols[i + 1];
-                    nextStartW = nextTh.offsetWidth;
+                    startW = headers[i].getBoundingClientRect().width;
+                    nextStartW = headers[i + 1].getBoundingClientRect().width;
                     handle.classList.add('active');
 
                     function onMouseMove(e) {
                         const dx = e.pageX - startX;
                         const newW = Math.max(40, startW + dx);
                         const newNextW = Math.max(40, nextStartW - dx);
-                        th.style.width = newW + 'px';
-                        nextTh.style.width = newNextW + 'px';
+                        colEls[i].style.width = newW + 'px';
+                        colEls[i + 1].style.width = newNextW + 'px';
                     }
 
                     function onMouseUp() {
