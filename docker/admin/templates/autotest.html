@@ -851,14 +851,28 @@
             }
         }
 
+        // --- Server-Sent Events for instant UI updates ---
+        function connectSSE() {
+            const es = new EventSource(`${API}/events`);
+            es.onmessage = () => {
+                fetchTests();
+                fetchStatus();
+            };
+            es.onerror = () => {
+                // Reconnect handled automatically by EventSource
+            };
+        }
+
         // --- Init ---
         fetchStatus();
         fetchTests();
         fetchGitRemotes();
         loadVehicles();
         loadRemotes();
+        connectSSE();
+        // Fallback polling (SSE handles real-time; this catches missed events)
         setInterval(fetchStatus, 30000);
-        setInterval(fetchTests, 5000);
+        setInterval(fetchTests, 30000);
     </script>
     <script src="/admin/static/js/metrics.js"></script>
 </body>

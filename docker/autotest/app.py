@@ -16,9 +16,10 @@ from pathlib import Path
 
 import psutil
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
+from starlette.responses import StreamingResponse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -51,6 +52,27 @@ for _i in range(MAX_SITL_INSTANCES):
     sitl_instance_pool.put_nowait(_i)
 
 tests: dict[str, dict] = {}
+
+# --- Server-Sent Events ---
+# Each connected client gets a queue; state changes push to all queues.
+_sse_clients: list[asyncio.Queue] = []
+
+
+def _notify_state_change(test_id: str, state: str):
+    """Push a state-change event to all connected SSE clients."""
+    data = json.dumps({"test_id": test_id, "state": state})
+    for q in _sse_clients:
+        try:
+            q.put_nowait(data)
+        except asyncio.QueueFull:
+            pass  # drop event for slow clients
+
+
+def _set_state(test_info: dict, state: str):
+    """Set test state and notify SSE clients."""
+    test_info["state"] = state
+    _notify_state_change(test_info["test_id"], state)
+
 
 # Cache of ready-to-copy template worktrees keyed by commit SHA
 # Each entry: {"path": Path, "last_used": float}
@@ -769,7 +791,7 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
                          waf_build_args: list[str],
                          commit: str | None = None):
     test_info = tests[test_id]
-    test_info["state"] = "UPDATING"
+    _set_state(test_info, "UPDATING")
 
     wt_path = None
     # Each test gets its own buildlogs dir so concurrent tests don't clobber each other
@@ -847,7 +869,7 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
         await flush_log(test_info)
 
         # Get or create pre-built template (per-key lock: different builds run in parallel)
-        test_info["state"] = "BUILDING"
+        _set_state(test_info, "BUILDING")
         def build_log(msg):
             test_info["log"] += msg
 
@@ -875,7 +897,7 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
                         template_path, log_cb=build_log,
                     )
                 except RuntimeError as e:
-                    test_info["state"] = "FAILURE"
+                    _set_state(test_info, "FAILURE")
                     test_info["log"] += f"\n{e}\n"
                     return
 
@@ -888,13 +910,13 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
         await flush_log(test_info)
 
         # Grab a SITL instance slot (each uses unique ports: base + instance*10)
-        test_info["state"] = "QUEUED"
+        _set_state(test_info, "QUEUED")
         test_info["log"] += f"\n=== Waiting for SITL instance ({sitl_instance_pool.qsize()}/{MAX_SITL_INSTANCES} free) ===\n"
         await flush_log(test_info)
 
         instance_num = await sitl_instance_pool.get()
         try:
-            test_info["state"] = "TESTING"
+            _set_state(test_info, "TESTING")
             test_info["log"] += f"=== SITL instance {instance_num} (ports {5760 + instance_num*10}+) ===\n"
             test_info["log"] += f"=== Running: {test_target} ===\n"
             test_info["log"] += f"=== BUILDLOGS: {test_buildlogs} ===\n"
@@ -1007,17 +1029,17 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
             sitl_instance_pool.put_nowait(instance_num)
 
         if proc.returncode == 0:
-            test_info["state"] = "SUCCESS"
+            _set_state(test_info, "SUCCESS")
             test_info["log"] += "\nAll tests passed!\n"
         else:
-            test_info["state"] = "FAILURE"
+            _set_state(test_info, "FAILURE")
             test_info["log"] += f"\nTests failed (exit code {proc.returncode})\n"
 
     except asyncio.CancelledError:
-        test_info["state"] = "CANCELLED"
+        _set_state(test_info, "CANCELLED")
         test_info["log"] += "\nTest cancelled by user\n"
     except Exception as e:
-        test_info["state"] = "ERROR"
+        _set_state(test_info, "ERROR")
         test_info["log"] += f"\nUnexpected error: {e}\n"
         logger.exception("Test runner error")
     finally:
@@ -1174,6 +1196,33 @@ async def api_status():
         "total_tests": len(tests),
         "repo_exists": (ARDUPILOT_DIR / "waf").exists(),
     }
+
+
+@app.get("/autotest/api/events")
+async def sse_events(request: Request):
+    """Server-Sent Events stream for real-time test state changes."""
+    q: asyncio.Queue = asyncio.Queue(maxsize=256)
+    _sse_clients.append(q)
+
+    async def event_stream():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    data = await asyncio.wait_for(q.get(), timeout=30)
+                    yield f"data: {data}\n\n"
+                except asyncio.TimeoutError:
+                    # Send keepalive comment to prevent proxy/browser timeout
+                    yield ": keepalive\n\n"
+        finally:
+            _sse_clients.remove(q)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/autotest/api/metrics")
@@ -1351,7 +1400,7 @@ async def cancel_test(test_id: str):
     task = t.get("task")
     if task and not task.done():
         task.cancel()
-    t["state"] = "CANCELLED"
+    _set_state(t, "CANCELLED")
     t["finished_at"] = time.time()
     return {"status": "cancelled"}
 
@@ -1432,7 +1481,7 @@ async def cancel_batch(batch_id: str):
         task = t.get("task")
         if task and not task.done():
             task.cancel()
-        t["state"] = "CANCELLED"
+        _set_state(t, "CANCELLED")
         t["finished_at"] = time.time()
         cancelled_count += 1
     return {"status": "cancelled", "cancelled_count": cancelled_count}

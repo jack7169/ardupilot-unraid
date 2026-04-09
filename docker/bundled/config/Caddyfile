@@ -19,6 +19,12 @@
     handle /autotest {
         reverse_proxy 127.0.0.1:8090
     }
+    # Autotest SSE (no buffering for real-time events)
+    handle /autotest/api/events {
+        reverse_proxy 127.0.0.1:8091 {
+            flush_interval -1
+        }
+    }
     # Autotest API (served by autotest service)
     handle /autotest/* {
         reverse_proxy 127.0.0.1:8091
