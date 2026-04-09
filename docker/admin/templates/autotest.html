@@ -882,6 +882,10 @@
         (function() {
             const table = document.getElementById('tests-table');
             const cols = table.querySelectorAll('thead th');
+
+            // Convert percentage widths to pixels immediately so first drag doesn't snap
+            cols.forEach(th => { th.style.width = th.offsetWidth + 'px'; });
+
             cols.forEach((th, i) => {
                 if (i === cols.length - 1) return; // skip last column
                 const handle = document.createElement('div');
