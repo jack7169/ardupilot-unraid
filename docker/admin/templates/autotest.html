@@ -542,11 +542,16 @@
             }
 
             tbody.innerHTML = html;
-            autoFitColumns();
+            // Only auto-fit when test count changes (not on every state update)
+            if (totalTestCount !== _lastAutoFitCount) {
+                _lastAutoFitCount = totalTestCount;
+                autoFitColumns();
+            }
         }
 
         // --- Auto-fit column widths based on content ---
         let manualResize = false;
+        let _lastAutoFitCount = -1;
         const _measure = document.createElement('span');
         _measure.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;font:inherit;';
 
@@ -882,6 +887,9 @@
             }
         }
 
+        // Stop polling when modal is closed by any means (backdrop, Escape, button)
+        document.getElementById('logModal').addEventListener('hidden.bs.modal', stopLogPolling);
+
         // --- Git ---
         async function fetchGitRemotes() {
             try {
@@ -1007,11 +1015,21 @@
         }, 1000);
 
         // --- Server-Sent Events for instant UI updates ---
+        let _sseRefreshTimer = null;
+        let _ssePending = false;
+
         function connectSSE() {
             const es = new EventSource(`${API}/events`);
             es.onmessage = () => {
-                fetchTests();
-                fetchStatus();
+                // Debounce: batch rapid events into a single refresh
+                if (_sseRefreshTimer) return;
+                _sseRefreshTimer = setTimeout(() => {
+                    _sseRefreshTimer = null;
+                    if (!_ssePending) {
+                        _ssePending = true;
+                        Promise.all([fetchTests(), fetchStatus()]).finally(() => { _ssePending = false; });
+                    }
+                }, 500);
             };
             es.onerror = () => {
                 // Reconnect handled automatically by EventSource
