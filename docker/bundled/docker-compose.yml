@@ -38,7 +38,6 @@ services:
     image: tailscale/tailscale:latest
     container_name: ardupilot-tailscale
     restart: unless-stopped
-    hostname: ardupilot
     network_mode: service:ardupilot
     cap_add:
       - NET_ADMIN
