@@ -30,6 +30,25 @@ services:
       # Log-heavy volumes: bind mount to array (large storage, metadata-light)
       - ardupilot-buildlogs:/data/buildlogs:rw
 
+  # --- Tailscale: separate tailnet access (optional sidecar) ---
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: ardupilot-tailscale
+    restart: unless-stopped
+    hostname: ardupilot
+    network_mode: service:ardupilot
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: true
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+    depends_on:
+      - ardupilot
+
   # --- Cloudflare Tunnel: public ingress (optional sidecar) ---
   cloudflared:
     image: cloudflare/cloudflared:latest
@@ -48,6 +67,7 @@ volumes:
   custombuild-base:
   builder-workdir:
   shared-ardupilot:
+  tailscale-state:
   # Bind mount — stored on array (shfs), fine for logs
   ardupilot-buildlogs:
     driver: local
