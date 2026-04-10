@@ -341,10 +341,10 @@ async def commit_is_local(commit_or_ref: str, remote_name: str) -> tuple[bool, s
         if rc2 == 0:
             return True, sha.strip()
 
-    # Try as remote/branch
-    if "/" not in commit_or_ref and len(commit_or_ref) < 40:
+    # Try as remote/branch (works for both "master" and "feature/foo")
+    if len(commit_or_ref) < 40:
         rc, out = await run_cmd(
-            ["git", "rev-parse", "--verify", f"{remote_name}/{commit_or_ref}"],
+            ["git", "rev-parse", "--verify", f"refs/remotes/{remote_name}/{commit_or_ref}"],
             cwd=ARDUPILOT_DIR,
         )
         if rc == 0:
