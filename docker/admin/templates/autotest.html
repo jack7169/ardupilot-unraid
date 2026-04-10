@@ -542,6 +542,71 @@
             }
 
             tbody.innerHTML = html;
+            autoFitColumns();
+        }
+
+        // --- Auto-fit column widths based on content ---
+        let manualResize = false;
+        const _measure = document.createElement('span');
+        _measure.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;font:inherit;';
+
+        function autoFitColumns() {
+            if (manualResize) return;
+            const table = document.getElementById('tests-table');
+            if (!table) return;
+            const colEls = table.querySelectorAll('colgroup col');
+            const rows = table.querySelectorAll('tbody tr');
+            const headers = table.querySelectorAll('thead th');
+            const numCols = colEls.length;
+            if (rows.length === 0) return;
+
+            // Temporarily switch to auto layout to measure natural widths
+            table.style.tableLayout = 'auto';
+            colEls.forEach(col => col.style.width = '');
+
+            // Measure each header and sample of body cells
+            const maxW = new Array(numCols).fill(0);
+            const minW = 40;
+
+            // Measure headers
+            headers.forEach((th, i) => {
+                _measure.style.font = getComputedStyle(th).font;
+                _measure.textContent = th.textContent;
+                document.body.appendChild(_measure);
+                maxW[i] = Math.max(maxW[i], _measure.offsetWidth + 24); // padding
+                _measure.remove();
+            });
+
+            // Measure visible body rows (sample up to 30 for performance)
+            const sampleRows = Array.from(rows).filter(r => !r.classList.contains('d-none')).slice(0, 30);
+            for (const row of sampleRows) {
+                const cells = row.querySelectorAll('td');
+                cells.forEach((td, i) => {
+                    if (i >= numCols) return;
+                    _measure.style.font = getComputedStyle(td).font;
+                    _measure.textContent = td.textContent;
+                    document.body.appendChild(_measure);
+                    maxW[i] = Math.max(maxW[i], _measure.offsetWidth + 24);
+                    _measure.remove();
+                });
+            }
+
+            // Enforce minimums, then distribute proportionally to table width
+            const tableWidth = table.parentElement.offsetWidth;
+            maxW.forEach((w, i) => maxW[i] = Math.max(minW, w));
+            const totalContent = maxW.reduce((a, b) => a + b, 0);
+
+            // Scale to fit table, but don't shrink any column below its content
+            if (totalContent <= tableWidth) {
+                // Extra space: distribute proportionally
+                const scale = tableWidth / totalContent;
+                maxW.forEach((w, i) => { colEls[i].style.width = (w * scale) + 'px'; });
+            } else {
+                // Content wider than table: use natural proportions (scrollbar appears)
+                maxW.forEach((w, i) => { colEls[i].style.width = w + 'px'; });
+            }
+
+            table.style.tableLayout = 'fixed';
         }
 
         // --- GitHub links ---
@@ -907,6 +972,7 @@
                 handle.addEventListener('mousedown', (e) => {
                     e.preventDefault();
                     e.stopPropagation();
+                    manualResize = true;
                     startX = e.pageX;
                     startW = headers[i].getBoundingClientRect().width;
                     nextStartW = headers[i + 1].getBoundingClientRect().width;
