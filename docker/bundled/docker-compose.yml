@@ -31,6 +31,9 @@ services:
       - ardupilot-buildlogs:/data/buildlogs:rw
 
   # --- Tailscale: separate tailnet access (optional sidecar) ---
+  # First run: docker exec ardupilot-tailscale tailscale up
+  # Follow the login URL to bind to your tailnet.
+  # State persists in tailscale-state volume — only needed once.
   tailscale:
     image: tailscale/tailscale:latest
     container_name: ardupilot-tailscale
@@ -41,7 +44,6 @@ services:
       - NET_ADMIN
       - SYS_MODULE
     environment:
-      TS_AUTHKEY: ${TS_AUTHKEY:-}
       TS_STATE_DIR: /var/lib/tailscale
       TS_USERSPACE: true
     volumes:
