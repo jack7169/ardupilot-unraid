@@ -474,10 +474,11 @@
                     const safeClass = `batch-${item.batch_id.replace(/[^a-zA-Z0-9]/g,'_')}`;
 
                     const isExpanded = expandedBatches.has(item.batch_id);
+                    const vehicles = [...new Set(batchTests.map(t => t.vehicle))].join(', ');
 
                     html += `<tr class="batch-header" style="cursor:pointer" onclick="toggleBatch('${esc(item.batch_id)}', '${safeClass}')">
                         <td><i class="bi bi-chevron-${isExpanded ? 'down' : 'right'} me-1"></i><code class="small" title="${esc(item.batch_id)}">${esc(item.batch_id)}</code></td>
-                        <td>${esc(first.vehicle)}</td>
+                        <td>${esc(vehicles)}</td>
                         <td class="small"><strong>${total} tests</strong> &mdash;
                             <span class="text-success">${passed} pass</span>,
                             <span class="text-danger">${failed} fail</span>${cancelled > 0 ? `, <span class="text-secondary">${cancelled} cancelled</span>` : ''}${running > 0 ? `, <span class="text-primary">${running} running</span>` : ''}</td>
