@@ -16,16 +16,16 @@
         .overall-icon { font-size: 24px; }
         .overall-text { font-size: 18px; font-weight: 600; }
 
-        .section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #8b949e; margin-bottom: 12px; }
+        .section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: var(--bs-secondary-color); margin-bottom: 12px; }
 
-        .service-list { background: #212529; border-radius: 8px; border: 1px solid #373b3e; overflow: hidden; margin-bottom: 32px; }
-        .service-row { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid #2b3035; transition: background 0.1s; }
+        .service-list { background: var(--bs-body-bg); border-radius: 8px; border: 1px solid var(--bs-border-color); overflow: hidden; margin-bottom: 32px; }
+        .service-row { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--bs-border-color); transition: background 0.1s; }
         .service-row:last-child { border-bottom: none; }
-        .service-row:hover { background: #2b3035; }
+        .service-row:hover { background: var(--bs-tertiary-bg); }
 
         .service-info { flex: 1; }
-        .service-name { font-size: 15px; font-weight: 500; color: #dee2e6; }
-        .service-desc { font-size: 13px; color: #8b949e; margin-top: 2px; }
+        .service-name { font-size: 15px; font-weight: 500; color: var(--bs-body-color); }
+        .service-desc { font-size: 13px; color: var(--bs-secondary-color); margin-top: 2px; }
 
         .service-status { display: flex; align-items: center; gap: 8px; }
         .status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
@@ -41,12 +41,12 @@
         .status-label.major_outage { color: #e05545; }
         .status-label.unknown { color: #94a3b8; }
 
-        .response-time { font-size: 12px; color: #6c757d; margin-left: 8px; min-width: 50px; text-align: right; }
+        .response-time { font-size: 12px; color: var(--bs-secondary-color); margin-left: 8px; min-width: 50px; text-align: right; }
 
-        .status-footer { text-align: center; padding: 24px; color: #6c757d; font-size: 13px; }
+        .status-footer { text-align: center; padding: 24px; color: var(--bs-secondary-color); font-size: 13px; }
 
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-        .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #373b3e; border-top-color: #6c757d; border-radius: 50%; animation: spin 0.6s linear infinite; }
+        .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--bs-border-color); border-top-color: var(--bs-secondary-color); border-radius: 50%; animation: spin 0.6s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
     </style>
     <style>

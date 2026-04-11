@@ -17,7 +17,7 @@
         .state-CANCELLED { background-color: #6c757d !important; }
         .status-idle { color: #28a745; }
         .status-busy { color: #0d6efd; }
-        .batch-header td { background-color: rgba(255,255,255,0.08) !important; color: #dee2e6 !important; }
+        .batch-header td { background-color: var(--bs-tertiary-bg) !important; color: var(--bs-body-color) !important; }
 
         /* Resizable table columns */
         #tests-table { table-layout: fixed; width: 100%; border-collapse: collapse; }
@@ -40,7 +40,7 @@
             width: 5px;
             cursor: col-resize;
             z-index: 1;
-            border-right: 1px solid #495057;
+            border-right: 1px solid var(--bs-border-color);
         }
         .col-resize-handle:hover,
         .col-resize-handle.active {
