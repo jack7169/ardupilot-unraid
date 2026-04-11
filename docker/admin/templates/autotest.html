@@ -17,6 +17,7 @@
         .state-CANCELLED { background-color: #6c757d !important; }
         .status-idle { color: #28a745; }
         .status-busy { color: #0d6efd; }
+        .batch-header td { background-color: rgba(255,255,255,0.08) !important; color: #dee2e6 !important; }
 
         /* Resizable table columns */
         #tests-table { table-layout: fixed; width: 100%; border-collapse: collapse; }
@@ -474,7 +475,7 @@
 
                     const isExpanded = expandedBatches.has(item.batch_id);
 
-                    html += `<tr class="table-secondary" style="cursor:pointer" onclick="toggleBatch('${esc(item.batch_id)}', '${safeClass}')">
+                    html += `<tr class="batch-header" style="cursor:pointer" onclick="toggleBatch('${esc(item.batch_id)}', '${safeClass}')">
                         <td><i class="bi bi-chevron-${isExpanded ? 'down' : 'right'} me-1"></i><code class="small" title="${esc(item.batch_id)}">${esc(item.batch_id)}</code></td>
                         <td>${esc(first.vehicle)}</td>
                         <td class="small"><strong>${total} tests</strong> &mdash;
