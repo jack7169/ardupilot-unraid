@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
 <head>
     <meta charset="utf-8">
     <title>ArduPilot Firmware Webtools - Tests</title>
@@ -39,7 +39,7 @@
             width: 5px;
             cursor: col-resize;
             z-index: 1;
-            border-right: 1px solid #ccc;
+            border-right: 1px solid #495057;
         }
         .col-resize-handle:hover,
         .col-resize-handle.active {
@@ -53,7 +53,7 @@
         .metrics-pulse { animation: metrics-pulse 1.2s ease-in-out infinite; }
     </style>
 </head>
-<body class="bg-light">
+<body>
     <nav class="navbar bg-dark">
         <div class="container-fluid">
             <a class="navbar-brand" href="/">
@@ -80,7 +80,7 @@
     <div class="container-fluid px-3 py-3">
 
         <!-- Status Bar -->
-        <div class="alert alert-light d-flex align-items-center mb-3" id="status-bar">
+        <div class="alert alert-secondary d-flex align-items-center mb-3" id="status-bar">
             <i class="bi bi-circle-fill me-2 status-idle" id="status-dot"></i>
             <span id="status-text">Checking...</span>
             <span class="ms-auto text-muted small" id="status-repo"></span>
@@ -115,7 +115,7 @@
                         <label class="form-label">Ref</label>
                         <div class="input-group">
                             <input type="text" class="form-control" id="testRef" value="master" placeholder="branch/tag/SHA" list="refSuggestions">
-                            <button class="btn btn-outline-dark" type="button" onclick="loadBranches()" title="Load branches"><i class="bi bi-arrow-clockwise"></i></button>
+                            <button class="btn btn-outline-secondary" type="button" onclick="loadBranches()" title="Load branches"><i class="bi bi-arrow-clockwise"></i></button>
                         </div>
                         <datalist id="refSuggestions"></datalist>
                     </div>
@@ -191,7 +191,7 @@
                             <col style="width:6%">
                             <col style="width:7.9%">
                         </colgroup>
-                        <thead class="table-light">
+                        <thead class="table-dark">
                             <tr>
                                 <th>Test ID</th>
                                 <th>Vehicle</th>
@@ -258,7 +258,7 @@
                             <button class="btn btn-sm btn-outline-primary w-100" onclick="gitUpdate()"><i class="bi bi-download me-1"></i>Fetch & Checkout</button>
                         </div>
                     </div>
-                    <pre class="mt-2 p-2 bg-light border rounded small d-none" id="git-output"></pre>
+                    <pre class="mt-2 p-2 border rounded small d-none" id="git-output"></pre>
                 </div>
             </div>
         </div>
@@ -474,7 +474,7 @@
 
                     const isExpanded = expandedBatches.has(item.batch_id);
 
-                    html += `<tr class="table-light" style="cursor:pointer" onclick="toggleBatch('${esc(item.batch_id)}', '${safeClass}')">
+                    html += `<tr class="table-secondary" style="cursor:pointer" onclick="toggleBatch('${esc(item.batch_id)}', '${safeClass}')">
                         <td><i class="bi bi-chevron-${isExpanded ? 'down' : 'right'} me-1"></i><code class="small" title="${esc(item.batch_id)}">${esc(item.batch_id)}</code></td>
                         <td>${esc(first.vehicle)}</td>
                         <td class="small"><strong>${total} tests</strong> &mdash;
