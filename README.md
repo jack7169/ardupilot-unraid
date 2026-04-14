@@ -1,6 +1,6 @@
 # ArduPilot Firmware Webtools
 
-Self-hosted ArduPilot custom firmware builder and SITL autotest runner on Unraid. Public access at [jforbes.us](https://jforbes.us) via Cloudflare Tunnel with Zero Trust authentication.
+Self-hosted ArduPilot custom firmware builder and SITL autotest runner on Unraid. Public access at [jforbes.us](https://jforbes.us) via Cloudflare Tunnel with shared-password authentication.
 
 ## Architecture
 
@@ -38,6 +38,8 @@ All services run inside a single Docker container (`ardupilot-bundled`) managed 
     └───────────────────────────────────────────────────────────────┘
 ```
 
+A Cloudflare Worker (`cloudflare/worker/`) sits at the edge and gates public access behind a shared password. LAN and Tailscale access bypass the Worker entirely.
+
 ### Services (inside single container)
 
 | Process | Port | Description |
@@ -49,7 +51,7 @@ All services run inside a single Docker container (`ardupilot-bundled`) managed 
 | **Admin** | 8090 | Remotes management, status dashboard, docs, results viewer |
 | **Autotest** | 8091 | SITL test execution with concurrent instance pool |
 
-The **Cloudflare Tunnel** (`ardupilot-cloudflared`) runs as a separate sidecar container for public ingress via Zero Trust.
+The **Cloudflare Tunnel** (`ardupilot-cloudflared`) runs as a separate sidecar container for public ingress. A **Cloudflare Worker** handles password authentication at the edge.
 
 ### URL Routing (Caddyfile)
 
@@ -112,10 +114,29 @@ Requires `curl` and `jq`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AP_BUILD_URL` | `http://192.168.50.45:8000` | Server base URL |
+| `AP_BUILD_URL` | `http://100.99.196.120:8000` | Server base URL |
+| `AP_AUTH_PASSWORD` | — | Password for auto-login (skips interactive prompt) |
 
-For Tailscale: `AP_BUILD_URL=http://100.99.196.120:8000`
-For public access: `AP_BUILD_URL=https://jforbes.us`
+For public access: `AP_BUILD_URL=https://jforbes.us` (requires `ap-build login` first)
+
+#### Authentication (public URL only)
+
+When using `https://jforbes.us`, you must authenticate first:
+
+```bash
+export AP_BUILD_URL=https://jforbes.us
+ap-build login          # Enter password when prompted (session lasts 24h)
+ap-build list vehicles  # Now works
+```
+
+Alternatively, set `AP_AUTH_PASSWORD` to skip the prompt:
+```bash
+export AP_BUILD_URL=https://jforbes.us
+export AP_AUTH_PASSWORD=<password>
+ap-build list vehicles  # Auth header sent automatically
+```
+
+LAN/Tailscale access requires no authentication.
 
 ### Build Commands
 
@@ -399,11 +420,22 @@ After each test, logs are collected to `/results/{test_id}/`:
 
 ## Access Control
 
-Public access at `https://jforbes.us` is gated by Cloudflare Zero Trust:
+Public access at `https://jforbes.us` is gated by a Cloudflare Worker (`cloudflare/worker/`):
 
-- **Authentication**: OTP email verification
-- **Allowed domains**: `@s2va.mil`, `@tyrlaboratories.com`
-- **LAN bypass**: `http://carthagenas.local:8000` (no auth required)
+- **Authentication**: Shared password via login page (browser) or `X-Auth-Password` header (API)
+- **Sessions**: HMAC-signed cookie, 24-hour expiry
+- **Killswitch**: `ap-build killswitch on|off` to instantly block all public access
+- **LAN/Tailscale bypass**: Direct access to `http://<server-ip>:8000` requires no auth
+- **Bot protection**: Cloudflare's standard DDoS/WAF/bot filtering remains active
+
+### Killswitch
+
+Instantly block all public access while keeping LAN/Tailscale working:
+
+```bash
+ap-build killswitch on   # Block public access (503 "Site Offline")
+ap-build killswitch off  # Restore public access
+```
 
 ## Deployment
 
