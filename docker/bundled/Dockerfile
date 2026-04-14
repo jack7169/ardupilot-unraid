@@ -93,6 +93,9 @@ COPY --chown=ardupilot:ardupilot docker/admin/static/ /app/admin/static/
 RUN ln -s /app/admin/templates /app/templates && \
     ln -s /app/admin/static /app/static
 
+# Copy CLI tool (served for download)
+COPY --chown=ardupilot:ardupilot ap-build /app/admin/ap-build
+
 # Copy autotest service
 COPY --chown=ardupilot:ardupilot docker/autotest/app.py /app/autotest/
 

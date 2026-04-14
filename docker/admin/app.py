@@ -12,7 +12,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -30,6 +30,19 @@ CBS_RELOAD_TOKEN = os.environ.get("CBS_REMOTES_RELOAD_TOKEN", "")
 
 templates = Jinja2Templates(directory="/app/templates")
 app.mount("/admin/static", StaticFiles(directory="/app/static"), name="static")
+
+AP_BUILD_PATH = Path("/app/admin/ap-build")
+
+
+@app.get("/cli/ap-build")
+async def download_ap_build():
+    if not AP_BUILD_PATH.exists():
+        raise HTTPException(404, "ap-build not found")
+    return FileResponse(
+        AP_BUILD_PATH,
+        media_type="application/octet-stream",
+        filename="ap-build",
+    )
 
 
 # --- API Capabilities (machine-readable discovery for AI agents) ---

@@ -29,8 +29,9 @@ A command-line tool that talks to the server's REST API. Every command submits H
 ### Setup
 
 ```bash
-# Copy the script to your PATH (requires curl and jq)
-cp ap-build /usr/local/bin/
+# Download the CLI and make it executable (requires curl and jq)
+curl -o ap-build https://jforbes.us/cli/ap-build && chmod +x ap-build
+sudo mv ap-build /usr/local/bin/
 
 # Point to the public server and authenticate
 export AP_BUILD_URL=https://jforbes.us

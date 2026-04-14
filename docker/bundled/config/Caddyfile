@@ -53,6 +53,11 @@
         reverse_proxy 127.0.0.1:8090
     }
 
+    # CLI tool download
+    handle /cli/* {
+        reverse_proxy 127.0.0.1:8090
+    }
+
     # API capabilities discovery (for AI agents)
     handle /api/capabilities {
         reverse_proxy 127.0.0.1:8090

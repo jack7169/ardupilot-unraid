@@ -101,10 +101,11 @@ A full-featured command-line interface for builds, tests, git management, and ba
 ### Installation
 
 ```bash
-# Copy to PATH
-cp ap-build /usr/local/bin/
+# Download from the server
+curl -o ap-build https://jforbes.us/cli/ap-build && chmod +x ap-build
+sudo mv ap-build /usr/local/bin/
 
-# Or use directly
+# Or use directly from this repo
 ./ap-build help
 ```
 
