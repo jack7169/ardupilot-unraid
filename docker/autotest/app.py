@@ -1366,11 +1366,41 @@ async def submit_batch(req: BatchSubmitRequest):
         test_info["task"] = task
         submitted.append({"test_id": test_id, "test": test_target})
 
+    # Sync remote/vehicle/ref to admin panel (fire-and-forget, skip origin)
+    if req.remote != "origin":
+        asyncio.create_task(_sync_test_to_admin(req.remote, req.vehicle, req.ref))
+
     return {
         "batch_id": batch_id,
         "submitted": submitted,
         "count": len(submitted),
     }
+
+
+async def _sync_test_to_admin(remote: str, vehicle: str, ref: str):
+    """Register the tested remote/vehicle/ref in the admin panel."""
+    try:
+        # Get remote URL from git config
+        rc, url = await run_cmd(
+            ["git", "remote", "get-url", remote], cwd=ARDUPILOT_DIR
+        )
+        if rc != 0:
+            return
+        url = url.strip()
+
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                "http://127.0.0.1:8090/admin/api/ensure-release",
+                json={
+                    "remote_name": remote,
+                    "remote_url": url,
+                    "vehicle": vehicle,
+                    "ref": ref,
+                },
+                timeout=10,
+            )
+    except Exception as e:
+        logger.warning(f"Failed to sync test to admin panel: {e}")
 
 
 @app.get("/autotest/api/tests/{test_id}")

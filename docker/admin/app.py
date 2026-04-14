@@ -567,6 +567,59 @@ async def admin_page(request: Request):
 
 # --- API ---
 
+class EnsureReleaseRequest(BaseModel):
+    remote_name: str
+    remote_url: str
+    vehicle: str
+    ref: str
+
+
+@app.post("/admin/api/ensure-release")
+async def ensure_release(req: EnsureReleaseRequest):
+    """Idempotent: ensure remote/vehicle/release exists. Used by autotest sync."""
+    remotes = read_remotes()
+    changed = False
+
+    # 1. Ensure remote exists
+    remote = next((r for r in remotes if r["name"] == req.remote_name), None)
+    if not remote:
+        remote = {"name": req.remote_name, "url": req.remote_url, "vehicles": []}
+        remotes.append(remote)
+        changed = True
+
+    # 2. Ensure vehicle exists
+    vehicle = next((v for v in remote.get("vehicles", []) if v["name"] == req.vehicle), None)
+    if not vehicle:
+        vehicle = {"name": req.vehicle, "releases": []}
+        remote.setdefault("vehicles", []).append(vehicle)
+        changed = True
+
+    # 3. Build commit_reference
+    ref = req.ref
+    if len(ref) == 40 and all(c in "0123456789abcdef" for c in ref.lower()):
+        commit_ref = ref  # raw SHA
+    elif ref.startswith("refs/"):
+        commit_ref = ref  # already a refspec
+    else:
+        commit_ref = f"refs/heads/{ref}"
+
+    # 4. Ensure release exists (dedup by commit_reference)
+    existing_refs = {r.get("commit_reference") for r in vehicle.get("releases", [])}
+    if commit_ref not in existing_refs:
+        vehicle.setdefault("releases", []).append({
+            "release_type": "branch",
+            "version_number": ref,
+            "commit_reference": commit_ref,
+        })
+        changed = True
+
+    if changed:
+        write_remotes(remotes)
+        await trigger_refresh()
+
+    return {"status": "ok", "changed": changed}
+
+
 @app.get("/admin/api/remotes")
 async def list_remotes():
     return read_remotes()
