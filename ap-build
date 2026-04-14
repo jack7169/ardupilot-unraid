@@ -837,6 +837,45 @@ do_login() {
     fi
 }
 
+do_killswitch() {
+    local action="${1:?Usage: ap-build killswitch <on|off>}"
+    local enabled
+    case "$action" in
+        on)  enabled=true ;;
+        off) enabled=false ;;
+        *)   err "Usage: ap-build killswitch <on|off>" ;;
+    esac
+
+    # Build auth for this specific call (killswitch may be called before AUTH_ARGS are set)
+    local -a auth=()
+    if [[ -n "${AP_AUTH_PASSWORD:-}" ]]; then
+        auth=(-H "X-Auth-Password: ${AP_AUTH_PASSWORD}")
+    elif [[ -f "$AUTH_COOKIE_FILE" ]]; then
+        auth=(-H "Cookie: cf_auth=$(cat "$AUTH_COOKIE_FILE")")
+    else
+        err "Not logged in. Run 'ap-build login' first or set AP_AUTH_PASSWORD"
+    fi
+
+    local response
+    response=$(curl -s -w '\n%{http_code}' ${auth[@]+"${auth[@]}"} \
+        -X POST "${BASE_URL}/__admin/killswitch" \
+        -H 'Content-Type: application/json' \
+        -d "{\"enabled\": ${enabled}}" 2>/dev/null) || err "Cannot reach server"
+
+    local code="${response##*$'\n'}"
+    local body="${response%$'\n'*}"
+
+    [[ "$code" -ge 200 && "$code" -lt 300 ]] || err "$(echo "$body" | jq -r '.error // .' 2>/dev/null) (HTTP $code)"
+
+    local state
+    state=$(echo "$body" | jq -r '.killswitch')
+    if [[ "$state" == "on" ]]; then
+        echo -e "${RED}Killswitch ON — public access blocked${NC}"
+    else
+        success "Killswitch OFF — public access open"
+    fi
+}
+
 # ============================================================
 # MAIN
 # ============================================================
@@ -896,7 +935,8 @@ case "$cmd" in
             *) err "Unknown git command: $subcmd" ;;
         esac
         ;;
-    login)    do_login ;;
+    login)      do_login ;;
+    killswitch) do_killswitch "$@" ;;
     help|-h|--help) usage ;;
     *) err "Unknown command: $cmd. Run 'ap-build help' for usage." ;;
 esac
