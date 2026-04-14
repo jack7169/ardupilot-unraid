@@ -8,6 +8,17 @@ BASE_URL="${AP_BUILD_URL:-http://100.99.196.120:8000}"
 API="${BASE_URL}/api/v1"
 AUTOTEST_API="${BASE_URL}/autotest/api"
 
+# Auth
+AUTH_COOKIE_FILE="${HOME}/.config/ap-build/cookie"
+AUTH_ARGS=()
+if [[ "$BASE_URL" == https://* ]]; then
+    if [[ -n "${AP_AUTH_PASSWORD:-}" ]]; then
+        AUTH_ARGS=(-H "X-Auth-Password: ${AP_AUTH_PASSWORD}")
+    elif [[ -f "$AUTH_COOKIE_FILE" ]]; then
+        AUTH_ARGS=(-H "Cookie: cf_auth=$(cat "$AUTH_COOKIE_FILE")")
+    fi
+fi
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -26,7 +37,7 @@ require_cmd jq
 
 api_get() {
     local response
-    response=$(curl -s -w '\n%{http_code}' "${1}" 2>/dev/null) || err "Cannot reach: GET $1"
+    response=$(curl -s -w '\n%{http_code}' ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${1}" 2>/dev/null) || err "Cannot reach: GET $1"
     local code="${response##*$'\n'}"
     local body="${response%$'\n'*}"
     [[ "$code" -ge 200 && "$code" -lt 300 ]] || err "$(echo "$body" | jq -r '.detail // .' 2>/dev/null || echo "$body") (HTTP $code)"
@@ -34,7 +45,7 @@ api_get() {
 }
 api_post() {
     local response
-    response=$(curl -s -w '\n%{http_code}' -X POST "${1}" -H 'Content-Type: application/json' -d "$2" 2>/dev/null) || err "Cannot reach: POST $1"
+    response=$(curl -s -w '\n%{http_code}' ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} -X POST "${1}" -H 'Content-Type: application/json' -d "$2" 2>/dev/null) || err "Cannot reach: POST $1"
     local code="${response##*$'\n'}"
     local body="${response%$'\n'*}"
     [[ "$code" -ge 200 && "$code" -lt 300 ]] || err "$(echo "$body" | jq -r '.detail // .' 2>/dev/null || echo "$body") (HTTP $code)"
@@ -261,7 +272,7 @@ show_build_logs() {
         local prev_lines=0
         while true; do
             local logs
-            logs=$(curl -sf "${API}/builds/${build_id}/logs" 2>/dev/null || echo "")
+            logs=$(curl -sf ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${API}/builds/${build_id}/logs" 2>/dev/null || echo "")
             if [[ -n "$logs" ]]; then
                 local total_lines
                 total_lines=$(echo "$logs" | wc -l)
@@ -271,7 +282,7 @@ show_build_logs() {
                 fi
             fi
             local state
-            state=$(curl -sf "${API}/builds/${build_id}" 2>/dev/null | jq -r '.progress.state' 2>/dev/null || echo "UNKNOWN")
+            state=$(curl -sf ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${API}/builds/${build_id}" 2>/dev/null | jq -r '.progress.state' 2>/dev/null || echo "UNKNOWN")
             case "$state" in
                 SUCCESS) echo -e "\n${GREEN}Build completed successfully${NC}"; break ;;
                 FAILURE|ERROR|TIMED_OUT) echo -e "\n${RED}Build failed: ${state}${NC}"; break ;;
@@ -297,7 +308,7 @@ download_artifact() {
     [[ -z "$output" ]] && output="${build_id}.tar.gz"
 
     info "Downloading artifact to ${output}..."
-    curl -s -f "${API}/builds/${build_id}/artifact" -o "$output" || err "Artifact not available for build ${build_id}"
+    curl -s -f ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${API}/builds/${build_id}/artifact" -o "$output" || err "Artifact not available for build ${build_id}"
     success "Downloaded: ${output}"
 }
 
@@ -457,7 +468,7 @@ test_logs() {
         local prev_lines=0
         while true; do
             local logs
-            logs=$(curl -sf "${AUTOTEST_API}/tests/${test_id}/logs" 2>/dev/null || echo "")
+            logs=$(curl -sf ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${AUTOTEST_API}/tests/${test_id}/logs" 2>/dev/null || echo "")
             if [[ -n "$logs" ]]; then
                 local total_lines
                 total_lines=$(echo "$logs" | wc -l)
@@ -467,7 +478,7 @@ test_logs() {
                 fi
             fi
             local state
-            state=$(curl -sf "${AUTOTEST_API}/tests/${test_id}" 2>/dev/null | jq -r '.state' 2>/dev/null || echo "UNKNOWN")
+            state=$(curl -sf ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${AUTOTEST_API}/tests/${test_id}" 2>/dev/null | jq -r '.state' 2>/dev/null || echo "UNKNOWN")
             case "$state" in
                 SUCCESS) echo -e "\n${GREEN}Tests passed!${NC}"; break ;;
                 FAILURE|ERROR) echo -e "\n${RED}Tests failed: ${state}${NC}"; break ;;
@@ -486,14 +497,14 @@ test_watch() {
 
     while true; do
         local data
-        data=$(curl -sf "${AUTOTEST_API}/tests/${test_id}" 2>/dev/null) || { sleep 2; continue; }
+        data=$(curl -sf ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${AUTOTEST_API}/tests/${test_id}" 2>/dev/null) || { sleep 2; continue; }
 
         local state
         state=$(echo "$data" | jq -r '.state')
 
         # Get full log and show new lines
         local logs
-        logs=$(curl -sf "${AUTOTEST_API}/tests/${test_id}/logs" 2>/dev/null || echo "")
+        logs=$(curl -sf ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${AUTOTEST_API}/tests/${test_id}/logs" 2>/dev/null || echo "")
         if [[ -n "$logs" ]]; then
             local cur_len
             cur_len=$(printf '%s' "$logs" | wc -c)
@@ -648,7 +659,7 @@ TEST: \(.test_id) | \(.test) | \(.state)
 batch_summary() {
     local batch_id="${1:?Usage: ap-build batch summary <batch_id>}"
     # Use the AI-friendly plaintext summary endpoint
-    curl -s "${AUTOTEST_API}/batches/${batch_id}/summary" 2>/dev/null || err "Failed to fetch batch summary"
+    curl -s ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${AUTOTEST_API}/batches/${batch_id}/summary" 2>/dev/null || err "Failed to fetch batch summary"
 }
 
 batch_watch() {
@@ -667,7 +678,7 @@ batch_watch() {
 
     while [[ $(date +%s) -lt $deadline ]]; do
         local data
-        data=$(curl -s --max-time 10 "${AUTOTEST_API}/batches/${batch_id}" 2>/dev/null) || { sleep 2; continue; }
+        data=$(curl -s --max-time 10 ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${AUTOTEST_API}/batches/${batch_id}" 2>/dev/null) || { sleep 2; continue; }
 
         local total passed failed running cancelled complete
         total=$(echo "$data" | jq -r '.total // 0')
@@ -753,7 +764,7 @@ batch_wait() {
     info "Waiting for batch ${batch_id} to complete (timeout: ${timeout}s)..."
 
     local response
-    response=$(curl -s -w '\n%{http_code}' "${AUTOTEST_API}/batches/${batch_id}/wait?timeout=${timeout}" 2>/dev/null) || err "Cannot reach server"
+    response=$(curl -s -w '\n%{http_code}' ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${AUTOTEST_API}/batches/${batch_id}/wait?timeout=${timeout}" 2>/dev/null) || err "Cannot reach server"
     local code="${response##*$'\n'}"
     local body="${response%$'\n'*}"
 
