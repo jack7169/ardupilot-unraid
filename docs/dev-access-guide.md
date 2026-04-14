@@ -142,7 +142,7 @@ Interactive Swagger UI: https://jforbes.us/autotest/api/docs
 
 ## Notes
 
-- Tests run with `--speedup -1` (unlimited simulation speed) for fast, deterministic results
+- Tests run with `--speedup -1` (unlimited simulation speed) for fast results. At full server load (50+ concurrent tests), CPU contention can cause non-deterministic timing-sensitive failures — rerun flaky tests in a smaller batch to confirm
 - Up to 50 tests run in parallel — a batch compiles the binary once and shares it
 - Build caches are shared: same commit + vehicle = instant binary reuse
 - Test results include dataflash logs, tlogs, and autotest output at `/results/<test_id>/`
