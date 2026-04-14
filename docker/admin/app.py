@@ -521,7 +521,7 @@ class VehicleIn(BaseModel):
 class RemoteIn(BaseModel):
     name: str
     url: str
-    vehicles: list[VehicleIn]
+    vehicles: list[VehicleIn] = []
 
 
 # --- Helpers ---

@@ -15,6 +15,7 @@ import traceback
 import uuid
 from pathlib import Path
 
+import httpx
 import psutil
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -1750,6 +1751,18 @@ async def add_git_remote(req: AddRemoteRequest):
         ["git", "fetch", req.name, "--tags"],
         cwd=ARDUPILOT_DIR, timeout=300,
     )
+
+    # Sync to admin panel so the remote appears in the UI
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                "http://127.0.0.1:8090/admin/api/remotes",
+                json={"name": req.name, "url": req.url, "vehicles": []},
+                timeout=10,
+            )
+    except Exception as e:
+        logger.warning(f"Failed to sync remote to admin panel: {e}")
+
     return {
         "status": "ok",
         "output": f"Added remote {req.name} ({req.url})\n"
