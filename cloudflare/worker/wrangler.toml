@@ -8,4 +8,4 @@ routes = [
 
 [[kv_namespaces]]
 binding = "AUTH_KV"
-id = "REPLACE_AFTER_CREATE"
+id = "50ecf806a64b43b1b1c30920ea6acb0f"
