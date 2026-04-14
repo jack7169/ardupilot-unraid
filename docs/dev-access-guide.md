@@ -136,25 +136,9 @@ ap-build git add-remote <name> <url>        Add a fork
 ap-build git branches --remote <name>       List remote branches
 ```
 
-## REST API
+## API Docs
 
-All endpoints are available at `https://jforbes.us`. Authenticate with a header:
-
-```
-X-Auth-Password: <password>
-```
-
-Or use a session cookie obtained from `POST /__auth/api`:
-
-```bash
-curl -X POST https://jforbes.us/__auth/api \
-  -H 'Content-Type: application/json' \
-  -d '{"password":"<password>"}'
-# Returns: {"status":"ok","expires_in":86400}
-# Set-Cookie header contains cf_auth=... (use in subsequent requests)
-```
-
-Interactive API docs: https://jforbes.us/autotest/api/docs
+Interactive Swagger UI: https://jforbes.us/autotest/api/docs
 
 ## Notes
 
