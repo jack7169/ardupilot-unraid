@@ -29,7 +29,6 @@
                 <a href="/" class="btn btn-outline-light me-1"><i class="bi bi-hammer me-2"></i>Builder</a>
                 <a href="/admin" class="btn btn-outline-light me-1 active"><i class="bi bi-gear me-2"></i>Admin</a>
                 <a href="/autotest" class="btn btn-outline-light me-1"><i class="bi bi-bug me-2"></i>Tests</a>
-                <a href="/results/" class="btn btn-outline-light me-1"><i class="bi bi-clipboard-data me-2"></i>Results</a>
                 <a href="/status" class="btn btn-outline-light me-1"><i class="bi bi-heart-pulse me-2"></i>Status</a>
                 <a href="/docs" class="btn btn-outline-light me-1"><i class="bi bi-book me-2"></i>Docs</a>
             </div>
@@ -315,7 +314,7 @@
                         </div>
                     </div>
                     <div class="card-body p-0">
-                        ${(remote.vehicles || []).map(vehicle => `
+                        ${(remote.vehicles || []).filter(v => (v.releases || []).length > 0).map(vehicle => `
                             <div class="border-bottom px-3 py-2">
                                 <div class="d-flex justify-content-between align-items-center mb-1">
                                     <strong><i class="bi bi-airplane me-2"></i>${esc(vehicle.name)}</strong>
@@ -353,7 +352,7 @@
                                 </table>
                             </div>
                         `).join('')}
-                        ${(remote.vehicles || []).length === 0 ? '<div class="px-3 py-2 text-muted">No vehicles configured</div>' : ''}
+                        ${(remote.vehicles || []).filter(v => (v.releases || []).length > 0).length === 0 ? '<div class="px-3 py-2 text-muted">No vehicles with releases configured</div>' : ''}
                     </div>
                 </div>
             `).join('');
