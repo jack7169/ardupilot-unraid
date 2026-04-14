@@ -177,7 +177,7 @@
                     <button class="btn btn-sm btn-outline-secondary" id="toggleColBtn" onclick="toggleGroupCol()" title="Toggle between Remote/Ref and Batch ID">
                         <i class="bi bi-arrow-left-right me-1"></i><span id="toggleColLabel">Batch ID</span>
                     </button>
-                    <select class="form-select form-select-sm" id="perPage" style="width: auto;" onchange="currentPage=0; renderPage();">
+                    <select class="form-select form-select-sm" id="perPage" style="width: auto;" onchange="currentPage=0; fetchTests();">
                         <option value="20" selected>20 / page</option>
                         <option value="50">50 / page</option>
                         <option value="100">100 / page</option>
@@ -331,14 +331,20 @@
         }
 
         // --- Tests ---
-        // Fetch recent tests with server-side pagination, update incrementally via SSE
-        let allTests = [];
-        const FETCH_LIMIT = 200;
+        // Server-side grouping and pagination via /display-items endpoint
+        let displayItems = [];
+        let displayTotal = 0;
+        let totalTestCount = 0;
 
         async function fetchTests() {
             try {
-                const resp = await fetch(`${API}/tests?limit=${FETCH_LIMIT}`);
-                allTests = await resp.json();
+                const perPage = parseInt(document.getElementById('perPage').value) || 20;
+                const offset = currentPage * perPage;
+                const resp = await fetch(`${API}/tests/display-items?limit=${perPage}&offset=${offset}`);
+                const data = await resp.json();
+                displayItems = data.items;
+                displayTotal = data.total;
+                totalTestCount = data.items.reduce((n, item) => n + item.tests.length, 0);
                 renderPage();
             } catch (e) {
                 document.getElementById('tests-body').innerHTML =
@@ -354,45 +360,15 @@
             } catch { return null; }
         }
 
-        function buildDisplayItems(tests) {
-            // Group into display items: each batch = 1 item, standalone = 1 item
-            const batches = {};
-            const standalone = [];
-            tests.forEach(t => {
-                if (t.batch_id) {
-                    if (!batches[t.batch_id]) batches[t.batch_id] = { batch_id: t.batch_id, tests: [], created_at: t.created_at };
-                    batches[t.batch_id].tests.push(t);
-                    batches[t.batch_id].created_at = Math.min(batches[t.batch_id].created_at, t.created_at);
-                } else {
-                    standalone.push({ batch_id: null, tests: [t], created_at: t.created_at });
-                }
-            });
-            // Merge and sort by created_at descending
-            const items = Object.values(batches).concat(standalone);
-            items.sort((a, b) => b.created_at - a.created_at);
-            return items;
-        }
-
         function renderPage() {
-            const perPage = parseInt(document.getElementById('perPage').value);
-            const items = buildDisplayItems(allTests);
-            const totalItems = items.length;
-
-            let pageItems;
-            if (perPage > 0) {
-                const start = currentPage * perPage;
-                pageItems = items.slice(start, start + perPage);
-            } else {
-                pageItems = items;
-            }
-
-            renderDisplayItems(pageItems, allTests.length);
-            updatePagination(perPage, totalItems);
+            renderDisplayItems(displayItems, totalTestCount);
+            updatePagination();
         }
 
-        function updatePagination(perPage, totalItems) {
+        function updatePagination() {
+            const perPage = parseInt(document.getElementById('perPage').value) || 20;
             const footer = document.getElementById('pagination-footer');
-            if (perPage === 0 || totalItems <= perPage) {
+            if (perPage === 0 || displayTotal <= perPage) {
                 footer.style.display = 'none';
                 footer.classList.add('d-none');
                 return;
@@ -400,16 +376,16 @@
             footer.style.display = '';
             footer.classList.remove('d-none');
             footer.style.setProperty('display', 'flex', 'important');
-            const totalPages = Math.ceil(totalItems / perPage);
+            const totalPages = Math.ceil(displayTotal / perPage);
             document.getElementById('prevBtn').disabled = currentPage <= 0;
             document.getElementById('nextBtn').disabled = currentPage >= totalPages - 1;
-            document.getElementById('pageInfo').textContent = `Page ${currentPage + 1} of ${totalPages} (${totalItems} items)`;
+            document.getElementById('pageInfo').textContent = `Page ${currentPage + 1} of ${totalPages} (${displayTotal} items)`;
         }
 
         function changePage(delta) {
             currentPage += delta;
             if (currentPage < 0) currentPage = 0;
-            renderPage();
+            fetchTests();
         }
 
         function fmtTime(ts) {
@@ -1037,31 +1013,14 @@
         function connectSSE() {
             const es = new EventSource(`${API}/events`);
             es.onmessage = (event) => {
-                // Debounce: batch rapid events into a single update
+                // Debounce: batch rapid events into a single page refresh
                 if (_sseRefreshTimer) return;
-                _sseRefreshTimer = setTimeout(async () => {
+                _sseRefreshTimer = setTimeout(() => {
                     _sseRefreshTimer = null;
-                    if (_ssePending) return;
-                    _ssePending = true;
-                    try {
-                        // Parse the most recent event to get test_id
-                        let data;
-                        try { data = JSON.parse(event.data); } catch { data = null; }
-                        if (data && data.test_id) {
-                            const idx = allTests.findIndex(t => t.test_id === data.test_id);
-                            if (idx >= 0) {
-                                // Known test — update in place
-                                const updated = await fetchSingleTest(data.test_id);
-                                if (updated) allTests[idx] = updated;
-                            } else {
-                                // New test — fetch and prepend
-                                const updated = await fetchSingleTest(data.test_id);
-                                if (updated) allTests.unshift(updated);
-                            }
-                            renderPage();
-                        }
-                        fetchStatus();
-                    } finally { _ssePending = false; }
+                    if (!_ssePending) {
+                        _ssePending = true;
+                        Promise.all([fetchTests(), fetchStatus()]).finally(() => { _ssePending = false; });
+                    }
                 }, 500);
             };
             es.onerror = () => {

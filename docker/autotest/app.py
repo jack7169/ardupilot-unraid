@@ -1248,6 +1248,44 @@ async def api_metrics():
     }
 
 
+@app.get("/autotest/api/tests/display-items")
+async def display_items(limit: int = 20, offset: int = 0):
+    """Return tests grouped by batch, paginated by display item count.
+    Each batch = 1 item, each standalone test = 1 item."""
+    # Group all tests by batch_id
+    batches: dict[str, list] = {}
+    standalone: list[dict] = []
+    for t in tests.values():
+        bid = t.get("batch_id")
+        if bid:
+            batches.setdefault(bid, []).append(t)
+        else:
+            standalone.append(t)
+
+    # Build display items with created_at for sorting
+    items = []
+    for bid, batch_tests in batches.items():
+        created = min(t["created_at"] for t in batch_tests)
+        items.append({"batch_id": bid, "created_at": created, "tests": batch_tests})
+    for t in standalone:
+        items.append({"batch_id": None, "created_at": t["created_at"], "tests": [t]})
+
+    items.sort(key=lambda x: x["created_at"], reverse=True)
+    total = len(items)
+    page = items[offset:offset + limit]
+
+    # Serialize tests within each item
+    result = []
+    for item in page:
+        result.append({
+            "batch_id": item["batch_id"],
+            "created_at": item["created_at"],
+            "tests": [test_summary(t) for t in item["tests"]],
+        })
+
+    return {"items": result, "total": total, "limit": limit, "offset": offset}
+
+
 @app.get("/autotest/api/tests")
 async def list_tests(limit: int = 100, offset: int = 0, batch_id: str | None = None):
     from fastapi.responses import JSONResponse
