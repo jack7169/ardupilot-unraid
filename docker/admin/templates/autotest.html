@@ -331,19 +331,27 @@
         }
 
         // --- Tests ---
-        // Fetch all tests, then paginate client-side by display rows
-        // (each batch = 1 row, each standalone test = 1 row)
+        // Fetch recent tests with server-side pagination, update incrementally via SSE
         let allTests = [];
+        const FETCH_LIMIT = 200;
 
         async function fetchTests() {
             try {
-                const resp = await fetch(`${API}/tests?limit=0`);
+                const resp = await fetch(`${API}/tests?limit=${FETCH_LIMIT}`);
                 allTests = await resp.json();
                 renderPage();
             } catch (e) {
                 document.getElementById('tests-body').innerHTML =
                     '<tr><td colspan="8" class="text-center text-danger">Failed to load tests</td></tr>';
             }
+        }
+
+        async function fetchSingleTest(testId) {
+            try {
+                const resp = await fetch(`${API}/tests/${testId}`);
+                if (!resp.ok) return null;
+                return await resp.json();
+            } catch { return null; }
         }
 
         function buildDisplayItems(tests) {
@@ -1028,15 +1036,32 @@
 
         function connectSSE() {
             const es = new EventSource(`${API}/events`);
-            es.onmessage = () => {
-                // Debounce: batch rapid events into a single refresh
+            es.onmessage = (event) => {
+                // Debounce: batch rapid events into a single update
                 if (_sseRefreshTimer) return;
-                _sseRefreshTimer = setTimeout(() => {
+                _sseRefreshTimer = setTimeout(async () => {
                     _sseRefreshTimer = null;
-                    if (!_ssePending) {
-                        _ssePending = true;
-                        Promise.all([fetchTests(), fetchStatus()]).finally(() => { _ssePending = false; });
-                    }
+                    if (_ssePending) return;
+                    _ssePending = true;
+                    try {
+                        // Parse the most recent event to get test_id
+                        let data;
+                        try { data = JSON.parse(event.data); } catch { data = null; }
+                        if (data && data.test_id) {
+                            const idx = allTests.findIndex(t => t.test_id === data.test_id);
+                            if (idx >= 0) {
+                                // Known test — update in place
+                                const updated = await fetchSingleTest(data.test_id);
+                                if (updated) allTests[idx] = updated;
+                            } else {
+                                // New test — fetch and prepend
+                                const updated = await fetchSingleTest(data.test_id);
+                                if (updated) allTests.unshift(updated);
+                            }
+                            renderPage();
+                        }
+                        fetchStatus();
+                    } finally { _ssePending = false; }
                 }, 500);
             };
             es.onerror = () => {
@@ -1053,7 +1078,7 @@
         connectSSE();
         // Fallback polling (SSE handles real-time; this catches missed events)
         setInterval(fetchStatus, 30000);
-        setInterval(fetchTests, 30000);
+        setInterval(fetchTests, 60000);
     </script>
     <script src="/admin/static/js/metrics.js"></script>
 </body>
