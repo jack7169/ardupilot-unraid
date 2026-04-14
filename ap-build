@@ -106,8 +106,13 @@ GIT (autotest repo):
     --remote-url <url>       Remote URL (adds/updates the remote)
     --ref <branch|tag|sha>   Ref to checkout (default: master)
 
+AUTH:
+  ap-build login                                      Log in to remote server
+  ap-build killswitch <on|off>                        Toggle public access killswitch
+
 ENVIRONMENT:
-  AP_BUILD_URL   Base URL (default: http://100.99.196.120:8000)
+  AP_BUILD_URL       Base URL (default: http://100.99.196.120:8000)
+  AP_AUTH_PASSWORD    Password for auto-login (skips interactive prompt)
 
 EXAMPLES:
   ap-build list versions plane
@@ -795,6 +800,44 @@ batch_wait() {
 }
 
 # ============================================================
+# AUTH COMMANDS
+# ============================================================
+
+do_login() {
+    local password="${AP_AUTH_PASSWORD:-}"
+    if [[ -z "$password" ]]; then
+        echo -n "Password: "
+        read -rs password
+        echo
+    fi
+    [[ -z "$password" ]] && err "Password required"
+
+    local full_response
+    full_response=$(curl -si -X POST "${BASE_URL}/__auth/api" \
+        -H 'Content-Type: application/json' \
+        -d "$(jq -n --arg p "$password" '{password: $p}')" 2>/dev/null) || err "Cannot reach server"
+
+    local http_code
+    http_code=$(echo "$full_response" | head -1 | grep -o '[0-9][0-9][0-9]')
+
+    if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
+        local cookie_value
+        cookie_value=$(echo "$full_response" | grep -i 'set-cookie:' | grep -o 'cf_auth=[^;]*' | cut -d= -f2)
+
+        if [[ -z "$cookie_value" ]]; then
+            err "Login succeeded but no session cookie received"
+        fi
+
+        mkdir -p "$(dirname "$AUTH_COOKIE_FILE")"
+        echo "$cookie_value" > "$AUTH_COOKIE_FILE"
+        chmod 600 "$AUTH_COOKIE_FILE"
+        success "Logged in — session stored (expires in 24h)"
+    else
+        err "Login failed — check your password"
+    fi
+}
+
+# ============================================================
 # MAIN
 # ============================================================
 
@@ -853,6 +896,7 @@ case "$cmd" in
             *) err "Unknown git command: $subcmd" ;;
         esac
         ;;
+    login)    do_login ;;
     help|-h|--help) usage ;;
     *) err "Unknown command: $cmd. Run 'ap-build help' for usage." ;;
 esac
