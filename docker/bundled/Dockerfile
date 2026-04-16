@@ -1,5 +1,11 @@
 FROM ardupilot/ardupilot-dev-chibios:v0.1.5
 
+# Force UTF-8 everywhere so Python subprocesses can print Unicode (em-dashes in
+# ArduPilot test docstrings, etc.) without crashing with 'ascii' encoder errors.
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PYTHONIOENCODING=utf-8
+
 USER root
 
 # Create ardupilot user before package installs (redis-server claims GID 999 otherwise)

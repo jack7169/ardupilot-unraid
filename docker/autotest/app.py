@@ -110,7 +110,7 @@ def save_test_metadata(test_info: dict):
         "created_at": test_info["created_at"],
         "finished_at": test_info.get("finished_at"),
     }
-    meta_path.write_text(json.dumps(meta, indent=2))
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
 def load_persisted_tests():
@@ -125,16 +125,16 @@ def load_persisted_tests():
         if not meta_path.exists():
             continue
         try:
-            meta = json.loads(meta_path.read_text())
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
             test_id = meta["test_id"]
             # Mark any previously-running tests as ERROR (interrupted by restart)
             if meta["state"] in ("PENDING", "UPDATING", "BUILDING", "TESTING"):
                 meta["state"] = "ERROR"
                 meta["finished_at"] = meta.get("finished_at") or time.time()
-                meta_path.write_text(json.dumps(meta, indent=2))
+                meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
             # Load log from disk
             log_path = test_dir / "test.log"
-            log_text = log_path.read_text() if log_path.exists() else ""
+            log_text = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
             tests[test_id] = {
                 **meta,
                 "log": log_text,
@@ -391,7 +391,7 @@ async def fetch_remote(remote_name: str, remote_url: str | None = None, ref: str
     loop = asyncio.get_event_loop()
 
     def _locked_fetch():
-        with open(lock_path, "w") as lf:
+        with open(lock_path, "w", encoding="utf-8") as lf:
             fcntl.flock(lf, fcntl.LOCK_EX)
             try:
                 result = subprocess.run(
@@ -506,7 +506,7 @@ async def get_or_create_template(commit: str, log_cb=None) -> Path:
         tpl_gitdir = tpl_path / ".git"
         if tpl_gitdir.is_file():
             # Read the gitdir path from the worktree .git file
-            gitdir_content = tpl_gitdir.read_text().strip()
+            gitdir_content = tpl_gitdir.read_text(encoding="utf-8").strip()
             if gitdir_content.startswith("gitdir: "):
                 actual_gitdir = Path(gitdir_content[8:])
                 if not actual_gitdir.is_absolute():
@@ -720,7 +720,7 @@ async def get_or_create_build_template(
 # --- Test runner ---
 
 def _append_file(path: Path, content: str):
-    with open(path, "a") as f:
+    with open(path, "a", encoding="utf-8") as f:
         f.write(content)
 
 
@@ -799,7 +799,13 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
     # Each test gets its own buildlogs dir so concurrent tests don't clobber each other
     test_buildlogs = WORKTREES_DIR / f"buildlogs_{test_id}"
     test_buildlogs.mkdir(parents=True, exist_ok=True)
-    test_env = {**os.environ, "BUILDLOGS": str(test_buildlogs)}
+    test_env = {
+        **os.environ,
+        "BUILDLOGS": str(test_buildlogs),
+        "PYTHONIOENCODING": "utf-8",
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+        "LC_ALL": os.environ.get("LC_ALL", "C.UTF-8"),
+    }
 
     pinned_commit = commit  # --commit flag from client (None if not pinned)
 
@@ -942,14 +948,15 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
                         if not real.exists():
                             binary.rename(real)
                             binary.write_text(
-                                f"#!/bin/bash\nexec {real} -I {instance_num} \"$@\"\n"
+                                f"#!/bin/bash\nexec {real} -I {instance_num} \"$@\"\n",
+                                encoding="utf-8",
                             )
                             binary.chmod(0o755)
 
             # 2. Patch vehicle_test_suite.py — all port methods
             vts_path = wt_path / "Tools" / "autotest" / "vehicle_test_suite.py"
             if vts_path.exists():
-                vts = vts_path.read_text()
+                vts = vts_path.read_text(encoding="utf-8")
                 # adjust_ardupilot_port: used for MAVLink ports (5760, 5762, 5763)
                 vts = vts.replace(
                     "def adjust_ardupilot_port(self, port):\n"
@@ -983,17 +990,17 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
                     "            raise ValueError(\"offset too large\")\n"
                     f"        return {8000 + port_offset} + offset",
                 )
-                vts_path.write_text(vts)
+                vts_path.write_text(vts, encoding="utf-8")
 
             # 3. Patch util.py — mavproxy default rcin port
             util_path = wt_path / "Tools" / "autotest" / "pysim" / "util.py"
             if util_path.exists():
-                util_src = util_path.read_text()
+                util_src = util_path.read_text(encoding="utf-8")
                 util_src = util_src.replace(
                     "sitl_rcin_port=5501,",
                     f"sitl_rcin_port={5501 + port_offset},",
                 )
-                util_path.write_text(util_src)
+                util_path.write_text(util_src, encoding="utf-8")
 
             run_env = test_env
             # Deterministic mode: disable SITL wall-clock sync and seed
