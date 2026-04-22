@@ -1035,6 +1035,15 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
             # load or parallel instance count.
             run_env["SIM_DETERMINISTIC"] = "1"
             run_env["SIM_RNG_SEED"] = "42"
+            # Lock-step protocol: SITL pauses physics each frame and
+            # blocks on a UDP tick from Python. The Python framework
+            # ticks the sim deterministically. This is what lets a
+            # potato and a supercomputer produce identical results at
+            # 50x parallel — wall-clock has no influence on outcomes.
+            # SIM_LOCKSTEP_INSTANCE selects the per-test UDP port
+            # (5790 + instance*10) so concurrent tests don't collide.
+            run_env["SIM_LOCKSTEP"] = "1"
+            run_env["SIM_LOCKSTEP_INSTANCE"] = str(instance_num)
 
             # --speedup 100: belt-and-suspenders for branches without
             # the SIM_DETERMINISTIC patch.  High enough that SITL never
