@@ -12,7 +12,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -30,6 +30,19 @@ CBS_RELOAD_TOKEN = os.environ.get("CBS_REMOTES_RELOAD_TOKEN", "")
 
 templates = Jinja2Templates(directory="/app/templates")
 app.mount("/admin/static", StaticFiles(directory="/app/static"), name="static")
+
+AP_BUILD_PATH = Path("/app/admin/ap-build")
+
+
+@app.get("/cli/ap-build")
+async def download_ap_build():
+    if not AP_BUILD_PATH.exists():
+        raise HTTPException(404, "ap-build not found")
+    return FileResponse(
+        AP_BUILD_PATH,
+        media_type="application/octet-stream",
+        filename="ap-build",
+    )
 
 
 # --- API Capabilities (machine-readable discovery for AI agents) ---
@@ -521,7 +534,7 @@ class VehicleIn(BaseModel):
 class RemoteIn(BaseModel):
     name: str
     url: str
-    vehicles: list[VehicleIn]
+    vehicles: list[VehicleIn] = []
 
 
 # --- Helpers ---
@@ -566,6 +579,59 @@ async def admin_page(request: Request):
 
 
 # --- API ---
+
+class EnsureReleaseRequest(BaseModel):
+    remote_name: str
+    remote_url: str
+    vehicle: str
+    ref: str
+
+
+@app.post("/admin/api/ensure-release")
+async def ensure_release(req: EnsureReleaseRequest):
+    """Idempotent: ensure remote/vehicle/release exists. Used by autotest sync."""
+    remotes = read_remotes()
+    changed = False
+
+    # 1. Ensure remote exists
+    remote = next((r for r in remotes if r["name"] == req.remote_name), None)
+    if not remote:
+        remote = {"name": req.remote_name, "url": req.remote_url, "vehicles": []}
+        remotes.append(remote)
+        changed = True
+
+    # 2. Ensure vehicle exists
+    vehicle = next((v for v in remote.get("vehicles", []) if v["name"] == req.vehicle), None)
+    if not vehicle:
+        vehicle = {"name": req.vehicle, "releases": []}
+        remote.setdefault("vehicles", []).append(vehicle)
+        changed = True
+
+    # 3. Build commit_reference
+    ref = req.ref
+    if len(ref) == 40 and all(c in "0123456789abcdef" for c in ref.lower()):
+        commit_ref = ref  # raw SHA
+    elif ref.startswith("refs/"):
+        commit_ref = ref  # already a refspec
+    else:
+        commit_ref = f"refs/heads/{ref}"
+
+    # 4. Ensure release exists (dedup by commit_reference)
+    existing_refs = {r.get("commit_reference") for r in vehicle.get("releases", [])}
+    if commit_ref not in existing_refs:
+        vehicle.setdefault("releases", []).append({
+            "release_type": "branch",
+            "version_number": ref,
+            "commit_reference": commit_ref,
+        })
+        changed = True
+
+    if changed:
+        write_remotes(remotes)
+        await trigger_refresh()
+
+    return {"status": "ok", "changed": changed}
+
 
 @app.get("/admin/api/remotes")
 async def list_remotes():
@@ -805,13 +871,18 @@ async def results_page(request: Request, path: str = ""):
 
 # --- Status Page ---
 
+_CBS_HOST = os.environ.get("CBS_APP_URL", "http://custombuild-app:8080").rstrip("/")
+_REDIS_HOST = os.environ.get("CBS_REDIS_HOST", "redis")
+_AUTOTEST_HOST = os.environ.get("AUTOTEST_URL", "http://autotest:8091").rstrip("/")
+_CADDY_HOST = os.environ.get("CADDY_URL", "http://caddy:8000").rstrip("/")
+
 SERVICES = [
-    {"name": "Custom Firmware Builder", "description": "Web UI and API for building custom firmware", "check": "http", "url": "http://custombuild-app:8080/api/v1/vehicles"},
-    {"name": "Build Worker", "description": "Processes firmware build jobs from the queue", "check": "dns", "host": "custombuild-builder"},
-    {"name": "Redis", "description": "Message queue and job broker", "check": "tcp", "host": "redis", "port": 6379},
+    {"name": "Custom Firmware Builder", "description": "Web UI and API for building custom firmware", "check": "http", "url": f"{_CBS_HOST}/api/v1/vehicles"},
+    {"name": "Build Worker", "description": "Processes firmware build jobs from the queue", "check": "tcp", "host": _REDIS_HOST, "port": 6379},
+    {"name": "Redis", "description": "Message queue and job broker", "check": "tcp", "host": _REDIS_HOST, "port": 6379},
     {"name": "Admin Service", "description": "Remotes management and status dashboard", "check": "self"},
-    {"name": "Autotest Runner", "description": "SITL test execution and git management", "check": "http", "url": "http://autotest:8091/autotest/api/status"},
-    {"name": "Reverse Proxy", "description": "Caddy - routes traffic to all services", "check": "http", "url": "http://caddy:8000/"},
+    {"name": "Autotest Runner", "description": "SITL test execution and git management", "check": "http", "url": f"{_AUTOTEST_HOST}/autotest/api/status"},
+    {"name": "Reverse Proxy", "description": "Caddy - routes traffic to all services", "check": "http", "url": f"{_CADDY_HOST}/"},
 ]
 
 

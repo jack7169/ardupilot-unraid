@@ -3,20 +3,25 @@ Autotest service — runs ArduPilot SITL tests and exposes results via API.
 Supports concurrent tests using git worktrees for isolation.
 """
 import asyncio
+import fcntl
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import time
+import traceback
 import uuid
 from pathlib import Path
 
+import httpx
 import psutil
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
+from starlette.responses import StreamingResponse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,7 +29,9 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="ArduPilot Autotest", docs_url="/autotest/api/docs", redoc_url=None)
 
 WORKDIR = Path(os.environ.get("AUTOTEST_WORKDIR", "/workdir"))
-ARDUPILOT_DIR = WORKDIR / "ardupilot"
+# Use shared golden repo if available; fall back to per-service clone
+_shared = os.environ.get("SHARED_ARDUPILOT_DIR")
+ARDUPILOT_DIR = Path(_shared) if _shared else WORKDIR / "ardupilot"
 WORKTREES_DIR = WORKDIR / "worktrees"
 RESULTS_DIR = Path(os.environ.get("AUTOTEST_RESULTS_DIR", "/results"))
 BUILDLOGS_DIR = Path(os.environ.get("BUILDLOGS_DIR", "/buildlogs"))
@@ -40,13 +47,42 @@ _build_cache_guard = asyncio.Lock()  # protects build_cache dict only
 _build_key_locks: dict[str, asyncio.Lock] = {}
 
 # SITL instance pool — each instance gets unique ports via -I N (port + N*10)
-# This allows concurrent SITL execution without port conflicts
-MAX_SITL_INSTANCES = 50
+# This allows concurrent SITL execution without port conflicts.
+#
+# Determinism: cap concurrency at half the host CPU count. With --speedup 100
+# every SITL aggressively asks for CPU; if we oversubscribe, the autotest
+# Python framework's wall-clock-paced operations (MAVLink RTT, pexpect, etc.)
+# diverge run-to-run and previously-passing tests fail flakily under load.
+# 24 logical CPUs on the Unraid host → 12 slots leaves headroom for compile
+# and host services. The pool is reused across batches so first-fit ordering
+# stays stable for a given batch composition.
+MAX_SITL_INSTANCES = max(1, (os.cpu_count() or 16) // 2)
 sitl_instance_pool = asyncio.Queue()
 for _i in range(MAX_SITL_INSTANCES):
     sitl_instance_pool.put_nowait(_i)
 
 tests: dict[str, dict] = {}
+
+# --- Server-Sent Events ---
+# Each connected client gets a queue; state changes push to all queues.
+_sse_clients: list[asyncio.Queue] = []
+
+
+def _notify_state_change(test_id: str, state: str):
+    """Push a state-change event to all connected SSE clients."""
+    data = json.dumps({"test_id": test_id, "state": state})
+    for q in _sse_clients:
+        try:
+            q.put_nowait(data)
+        except asyncio.QueueFull:
+            pass  # drop event for slow clients
+
+
+def _set_state(test_info: dict, state: str):
+    """Set test state and notify SSE clients."""
+    test_info["state"] = state
+    _notify_state_change(test_info["test_id"], state)
+
 
 # Cache of ready-to-copy template worktrees keyed by commit SHA
 # Each entry: {"path": Path, "last_used": float}
@@ -59,6 +95,10 @@ MAX_CACHED_TEMPLATES = 10
 build_cache: dict[str, dict] = {}
 BUILD_TEMPLATES_DIR = WORKDIR / "build_templates"
 MAX_CACHED_BUILDS = 10
+
+# Cache of failed build keys to avoid retrying broken builds.
+# Cleared on container restart. Key -> error message.
+_build_failures: dict[str, str] = {}
 
 
 def save_test_metadata(test_info: dict):
@@ -78,7 +118,7 @@ def save_test_metadata(test_info: dict):
         "created_at": test_info["created_at"],
         "finished_at": test_info.get("finished_at"),
     }
-    meta_path.write_text(json.dumps(meta, indent=2))
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
 def load_persisted_tests():
@@ -93,16 +133,16 @@ def load_persisted_tests():
         if not meta_path.exists():
             continue
         try:
-            meta = json.loads(meta_path.read_text())
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
             test_id = meta["test_id"]
             # Mark any previously-running tests as ERROR (interrupted by restart)
             if meta["state"] in ("PENDING", "UPDATING", "BUILDING", "TESTING"):
                 meta["state"] = "ERROR"
                 meta["finished_at"] = meta.get("finished_at") or time.time()
-                meta_path.write_text(json.dumps(meta, indent=2))
+                meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
             # Load log from disk
             log_path = test_dir / "test.log"
-            log_text = log_path.read_text() if log_path.exists() else ""
+            log_text = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
             tests[test_id] = {
                 **meta,
                 "log": log_text,
@@ -199,6 +239,18 @@ class TestRequest(BaseModel):
     batch_id: str | None = None
 
 
+class BatchSubmitRequest(BaseModel):
+    """Submit multiple tests at once as a batch."""
+    vehicle: str = "Plane"
+    tests: list[str]  # e.g. ["test.Plane.Foo", "test.Plane.Bar"]
+    remote: str = "origin"
+    ref: str = "master"
+    commit: str | None = None
+    waf_configure_args: list[str] = []
+    waf_build_args: list[str] = []
+    batch_id: str | None = None  # client can supply; auto-generated if omitted
+
+
 class GitUpdateRequest(BaseModel):
     remote_url: str | None = None
     remote_name: str = "origin"
@@ -213,7 +265,7 @@ class AddRemoteRequest(BaseModel):
 # --- Helpers ---
 
 async def run_cmd(cmd: list[str], cwd: str | Path | None = None,
-                  timeout: int = 300) -> tuple[int, str]:
+                  timeout: int = 300, log_cb=None) -> tuple[int, str]:
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -221,25 +273,63 @@ async def run_cmd(cmd: list[str], cwd: str | Path | None = None,
         cwd=cwd,
     )
     try:
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        return proc.returncode, stdout.decode(errors="replace")
+        if log_cb:
+            # Stream output line-by-line to the callback
+            chunks = []
+            async def read_stream():
+                while True:
+                    line = await proc.stdout.readline()
+                    if not line:
+                        break
+                    text = line.decode(errors="replace")
+                    chunks.append(text)
+                    log_cb(text)
+            await asyncio.wait_for(read_stream(), timeout=timeout)
+            await proc.wait()
+            return proc.returncode, "".join(chunks)
+        else:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            return proc.returncode, stdout.decode(errors="replace")
     except asyncio.TimeoutError:
         proc.kill()
         await proc.wait()
         return -1, "Command timed out"
 
 
-async def ensure_repo():
+async def ensure_repo(log_cb=None):
     if not (ARDUPILOT_DIR / "waf").exists():
+        # Clean up incomplete clone if present
+        if ARDUPILOT_DIR.exists():
+            logger.info("Removing incomplete clone...")
+            shutil.rmtree(ARDUPILOT_DIR, ignore_errors=True)
         logger.info("Cloning ardupilot repository...")
+        if log_cb:
+            log_cb("Cloning ardupilot repository (first run)...\n")
         rc, out = await run_cmd(
-            ["git", "clone", "--recurse-submodules",
+            ["git", "clone", "--progress", "--recurse-submodules",
              "https://github.com/ArduPilot/ardupilot.git", str(ARDUPILOT_DIR)],
-            timeout=600,
+            timeout=600, log_cb=log_cb,
         )
         if rc != 0:
             raise RuntimeError(f"Failed to clone: {out}")
         logger.info("Clone complete")
+        if log_cb:
+            log_cb("Clone complete\n")
+
+    # Ensure submodules are initialized in the main repo (golden copy for templates)
+    if not (ARDUPILOT_DIR / "modules" / "mavlink" / ".git").exists():
+        logger.info("Initializing submodules in base repo...")
+        if log_cb:
+            log_cb("Initializing submodules in base repo...\n")
+        cpu_count = os.cpu_count() or 4
+        rc, out = await run_cmd(
+            ["git", "submodule", "update", "--init", "--recursive",
+             "--depth", "1", f"--jobs={cpu_count}"],
+            cwd=ARDUPILOT_DIR, timeout=600, log_cb=log_cb,
+        )
+        if rc != 0:
+            logger.warning(f"Submodule init issue: {out}")
+
     WORKTREES_DIR.mkdir(parents=True, exist_ok=True)
     TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
     BUILD_TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
@@ -260,10 +350,10 @@ async def commit_is_local(commit_or_ref: str, remote_name: str) -> tuple[bool, s
         if rc2 == 0:
             return True, sha.strip()
 
-    # Try as remote/branch
-    if "/" not in commit_or_ref and len(commit_or_ref) < 40:
+    # Try as remote/branch (works for both "master" and "feature/foo")
+    if len(commit_or_ref) < 40:
         rc, out = await run_cmd(
-            ["git", "rev-parse", "--verify", f"{remote_name}/{commit_or_ref}"],
+            ["git", "rev-parse", "--verify", f"refs/remotes/{remote_name}/{commit_or_ref}"],
             cwd=ARDUPILOT_DIR,
         )
         if rc == 0:
@@ -298,11 +388,29 @@ async def fetch_remote(remote_name: str, remote_url: str | None = None, ref: str
                     f"Updated remote {remote_name}: {current_url} -> {remote_url}"
                 )
 
-    fetch_cmd = ["git", "fetch", remote_name, "--prune", "--tags"]
+    fetch_cmd = ["git", "fetch", remote_name, "--prune", "--force", "--tags",
+                 "--no-recurse-submodules"]
     if ref and len(ref) < 40:
         # Explicitly fetch the target branch to ensure we get latest commits
         fetch_cmd.append(f"+refs/heads/{ref}:refs/remotes/{remote_name}/{ref}")
-    rc, out = await run_cmd(fetch_cmd, cwd=ARDUPILOT_DIR, timeout=300)
+
+    # Cross-process file lock to coordinate with custombuild-builder
+    lock_path = ARDUPILOT_DIR / ".fetch.lock"
+    loop = asyncio.get_event_loop()
+
+    def _locked_fetch():
+        with open(lock_path, "w", encoding="utf-8") as lf:
+            fcntl.flock(lf, fcntl.LOCK_EX)
+            try:
+                result = subprocess.run(
+                    fetch_cmd, cwd=ARDUPILOT_DIR,
+                    capture_output=True, timeout=300,
+                )
+                return result.returncode, (result.stdout + result.stderr).decode(errors="replace")
+            finally:
+                fcntl.flock(lf, fcntl.LOCK_UN)
+
+    rc, out = await loop.run_in_executor(None, _locked_fetch)
     output_lines.append(f"Fetch {remote_name}: {'OK' if rc == 0 else 'FAILED'}")
     if rc != 0:
         output_lines.append(out)
@@ -330,7 +438,7 @@ async def resolve_ref(remote_name: str, ref: str) -> str:
     return ref
 
 
-async def get_or_create_template(commit: str) -> Path:
+async def get_or_create_template(commit: str, log_cb=None) -> Path:
     """
     Get a cached template worktree for a commit, or create one.
     Templates are git worktrees with submodules initialized — ready to copy.
@@ -348,6 +456,8 @@ async def get_or_create_template(commit: str) -> Path:
                 del template_cache[commit]
 
     logger.info(f"Template cache MISS for {commit[:12]}, creating...")
+    if log_cb:
+        log_cb(f"Creating source template for {commit[:12]}...\n")
 
     # Evict oldest if at capacity
     evict_entry = None
@@ -376,23 +486,68 @@ async def get_or_create_template(commit: str) -> Path:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, shutil.rmtree, tpl_path, True)
 
+    # Unlock any stale lock and prune missing worktrees before creating
+    await run_cmd(
+        ["git", "worktree", "unlock", str(tpl_path)],
+        cwd=ARDUPILOT_DIR, timeout=10,
+    )
+    await run_cmd(["git", "worktree", "prune"], cwd=ARDUPILOT_DIR, timeout=30)
+
+    if log_cb:
+        log_cb(f"  Creating worktree at {tpl_path.name}...\n")
     rc, out = await run_cmd(
-        ["git", "worktree", "add", "--detach", str(tpl_path), commit],
-        cwd=ARDUPILOT_DIR, timeout=120,
+        ["git", "worktree", "add", "--force", "--detach", str(tpl_path), commit],
+        cwd=ARDUPILOT_DIR, timeout=120, log_cb=log_cb,
     )
     if rc != 0:
         raise RuntimeError(f"Failed to create template worktree: {out}")
 
-    cpu_count = os.cpu_count() or 4
-    submodule_cmd = [
-        "git", "submodule", "update", "--init", "--recursive",
-        "--depth", "1",
-        f"--jobs={cpu_count}",
-    ]
-    # Use main repo's submodule objects as reference to avoid re-fetching
-    if (ARDUPILOT_DIR / ".git" / "modules").exists():
-        submodule_cmd.extend(["--reference", str(ARDUPILOT_DIR)])
-    rc, out = await run_cmd(submodule_cmd, cwd=tpl_path, timeout=300)
+    # Fast submodule init: copy git module stores from main repo, then checkout.
+    # This avoids all network fetches — purely local filesystem operations.
+    # On btrfs (Docker vDisk), --reflink=auto makes the copy near-instant (COW).
+    main_modules = ARDUPILOT_DIR / ".git" / "modules"
+    if main_modules.exists():
+        if log_cb:
+            log_cb(f"  Copying submodule objects from base repo (local)...\n")
+        # Worktree .git is a file pointing to the main repo's worktrees dir;
+        # we need the actual git dir for this worktree
+        tpl_gitdir = tpl_path / ".git"
+        if tpl_gitdir.is_file():
+            # Read the gitdir path from the worktree .git file
+            gitdir_content = tpl_gitdir.read_text(encoding="utf-8").strip()
+            if gitdir_content.startswith("gitdir: "):
+                actual_gitdir = Path(gitdir_content[8:])
+                if not actual_gitdir.is_absolute():
+                    actual_gitdir = (tpl_path / actual_gitdir).resolve()
+            else:
+                actual_gitdir = tpl_gitdir
+        else:
+            actual_gitdir = tpl_gitdir
+
+        modules_dest = actual_gitdir / "modules"
+        rc, out = await run_cmd(
+            ["cp", "-a", "--reflink=auto", str(main_modules), str(modules_dest)],
+            timeout=120, log_cb=log_cb,
+        )
+        if rc != 0:
+            logger.warning(f"Failed to copy modules, falling back to remote fetch: {out}")
+
+        if log_cb:
+            log_cb(f"  Initializing submodule working trees...\n")
+        rc, out = await run_cmd(
+            ["git", "submodule", "update", "--init", "--recursive"],
+            cwd=tpl_path, timeout=300, log_cb=log_cb,
+        )
+    else:
+        # Fallback: no cached modules, fetch from remote
+        cpu_count = os.cpu_count() or 4
+        if log_cb:
+            log_cb(f"  Submodule update from remote ({cpu_count} jobs)...\n")
+        rc, out = await run_cmd(
+            ["git", "submodule", "update", "--init", "--recursive",
+             "--depth", "1", f"--jobs={cpu_count}"],
+            cwd=tpl_path, timeout=300, log_cb=log_cb,
+        )
     if rc != 0:
         logger.warning(f"Submodule update issue for template {commit[:12]}: {out}")
 
@@ -484,6 +639,13 @@ async def get_or_create_build_template(
     """
     key = build_cache_key(commit, vehicle, waf_configure_args, waf_build_args)
 
+    # Check if this build previously failed (don't retry broken builds)
+    if key in _build_failures:
+        err = _build_failures[key]
+        if log_cb:
+            log_cb(f"Build previously failed ({key[:8]}), skipping retry\n")
+        raise RuntimeError(f"Build previously failed: {err}")
+
     # Double-check cache (another task with same key may have finished first)
     async with _build_cache_guard:
         if key in build_cache and build_cache[key]["path"].exists():
@@ -515,6 +677,8 @@ async def get_or_create_build_template(
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, shutil.rmtree, bld_path, True)
 
+    if log_cb:
+        log_cb(f"Copying source template to build dir...\n")
     rc, out = await run_cmd(
         ["cp", "-a", "--reflink=auto", str(source_template), str(bld_path)],
         timeout=300,
@@ -528,13 +692,14 @@ async def get_or_create_build_template(
     if log_cb:
         log_cb(f"=== Configure: {' '.join(configure_cmd)} ===\n")
 
-    rc, out = await run_cmd(configure_cmd, cwd=bld_path, timeout=120)
-    if log_cb:
-        log_cb(out + "\n")
+    rc, out = await run_cmd(configure_cmd, cwd=bld_path, timeout=120,
+                            log_cb=log_cb)
     if rc != 0:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, shutil.rmtree, bld_path, True)
-        raise RuntimeError(f"Build configure failed: {out[-200:]}")
+        err_msg = out[-500:]
+        _build_failures[key] = err_msg
+        raise RuntimeError(f"Build configure failed: {err_msg}")
 
     # Build
     cpu_count = os.cpu_count() or 4
@@ -543,13 +708,14 @@ async def get_or_create_build_template(
     if log_cb:
         log_cb(f"=== Build: {' '.join(build_cmd)} ===\n")
 
-    rc, out = await run_cmd(build_cmd, cwd=bld_path, timeout=600)
-    if log_cb:
-        log_cb(out + "\n")
+    rc, out = await run_cmd(build_cmd, cwd=bld_path, timeout=600,
+                            log_cb=log_cb)
     if rc != 0:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, shutil.rmtree, bld_path, True)
-        raise RuntimeError(f"Build failed: {out[-200:]}")
+        err_msg = out[-500:]
+        _build_failures[key] = err_msg
+        raise RuntimeError(f"Build failed: {err_msg}")
 
     async with _build_cache_guard:
         build_cache[key] = {"path": bld_path, "last_used": time.time()}
@@ -562,7 +728,7 @@ async def get_or_create_build_template(
 # --- Test runner ---
 
 def _append_file(path: Path, content: str):
-    with open(path, "a") as f:
+    with open(path, "a", encoding="utf-8") as f:
         f.write(content)
 
 
@@ -635,13 +801,25 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
                          waf_build_args: list[str],
                          commit: str | None = None):
     test_info = tests[test_id]
-    test_info["state"] = "UPDATING"
+    _set_state(test_info, "UPDATING")
 
     wt_path = None
     # Each test gets its own buildlogs dir so concurrent tests don't clobber each other
     test_buildlogs = WORKTREES_DIR / f"buildlogs_{test_id}"
     test_buildlogs.mkdir(parents=True, exist_ok=True)
-    test_env = {**os.environ, "BUILDLOGS": str(test_buildlogs)}
+    test_env = {
+        **os.environ,
+        "BUILDLOGS": str(test_buildlogs),
+        "PYTHONIOENCODING": "utf-8",
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+        "LC_ALL": os.environ.get("LC_ALL", "C.UTF-8"),
+        # Pin Python hash randomization seed so dict/set iteration order is
+        # identical run-to-run. Without this, the autotest framework's
+        # set_parameters() submission order, MAVProxy module load order, and
+        # statustext dedup hashes can vary between batches and produce
+        # different message timing — a real source of batch flakiness.
+        "PYTHONHASHSEED": "0",
+    }
 
     pinned_commit = commit  # --commit flag from client (None if not pinned)
 
@@ -652,7 +830,10 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
         test_info["log"] += " ===\n"
         await flush_log(test_info)
 
-        await ensure_repo()
+        def source_log(msg):
+            test_info["log"] += msg
+
+        await ensure_repo(log_cb=source_log)
 
         # Phase 1: Resolve commit — local checks are lock-free, only fetch serializes
         found, resolved = await commit_is_local(ref, remote)
@@ -704,13 +885,13 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
                         template_path = template_cache[commit]["path"]
                         test_info["log"] += f"Template appeared while waiting (cache HIT)\n"
                 if template_path is None:
-                    template_path = await get_or_create_template(commit)
+                    template_path = await get_or_create_template(commit, log_cb=source_log)
 
         test_info["log"] += f"Template: {template_path}\n"
         await flush_log(test_info)
 
         # Get or create pre-built template (per-key lock: different builds run in parallel)
-        test_info["state"] = "BUILDING"
+        _set_state(test_info, "BUILDING")
         def build_log(msg):
             test_info["log"] += msg
 
@@ -738,8 +919,10 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
                         template_path, log_cb=build_log,
                     )
                 except RuntimeError as e:
-                    test_info["state"] = "FAILURE"
-                    test_info["log"] += f"\n{e}\n"
+                    _set_state(test_info, "FAILURE")
+                    test_info["log"] += f"\nBuild error: {e}\n"
+                    test_info["finished_at"] = time.time()
+                    await flush_log(test_info)
                     return
 
         # Fast copy from pre-built template — no git or build ops
@@ -751,13 +934,13 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
         await flush_log(test_info)
 
         # Grab a SITL instance slot (each uses unique ports: base + instance*10)
-        test_info["state"] = "QUEUED"
+        _set_state(test_info, "QUEUED")
         test_info["log"] += f"\n=== Waiting for SITL instance ({sitl_instance_pool.qsize()}/{MAX_SITL_INSTANCES} free) ===\n"
         await flush_log(test_info)
 
         instance_num = await sitl_instance_pool.get()
         try:
-            test_info["state"] = "TESTING"
+            _set_state(test_info, "TESTING")
             test_info["log"] += f"=== SITL instance {instance_num} (ports {5760 + instance_num*10}+) ===\n"
             test_info["log"] += f"=== Running: {test_target} ===\n"
             test_info["log"] += f"=== BUILDLOGS: {test_buildlogs} ===\n"
@@ -779,14 +962,15 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
                         if not real.exists():
                             binary.rename(real)
                             binary.write_text(
-                                f"#!/bin/bash\nexec {real} -I {instance_num} \"$@\"\n"
+                                f"#!/bin/bash\nexec {real} -I {instance_num} \"$@\"\n",
+                                encoding="utf-8",
                             )
                             binary.chmod(0o755)
 
             # 2. Patch vehicle_test_suite.py — all port methods
             vts_path = wt_path / "Tools" / "autotest" / "vehicle_test_suite.py"
             if vts_path.exists():
-                vts = vts_path.read_text()
+                vts = vts_path.read_text(encoding="utf-8")
                 # adjust_ardupilot_port: used for MAVLink ports (5760, 5762, 5763)
                 vts = vts.replace(
                     "def adjust_ardupilot_port(self, port):\n"
@@ -820,22 +1004,32 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
                     "            raise ValueError(\"offset too large\")\n"
                     f"        return {8000 + port_offset} + offset",
                 )
-                vts_path.write_text(vts)
+                vts_path.write_text(vts, encoding="utf-8")
 
             # 3. Patch util.py — mavproxy default rcin port
             util_path = wt_path / "Tools" / "autotest" / "pysim" / "util.py"
             if util_path.exists():
-                util_src = util_path.read_text()
+                util_src = util_path.read_text(encoding="utf-8")
                 util_src = util_src.replace(
                     "sitl_rcin_port=5501,",
                     f"sitl_rcin_port={5501 + port_offset},",
                 )
-                util_path.write_text(util_src)
+                util_path.write_text(util_src, encoding="utf-8")
 
             run_env = test_env
+            # Deterministic mode: disable SITL wall-clock sync and seed
+            # RNG so tests produce identical results regardless of CPU
+            # load or parallel instance count.
+            run_env["SIM_DETERMINISTIC"] = "1"
+            run_env["SIM_RNG_SEED"] = "42"
 
+            # --speedup 100: belt-and-suspenders for branches without
+            # the SIM_DETERMINISTIC patch.  High enough that SITL never
+            # sleeps between frames.
             proc = await asyncio.create_subprocess_exec(
-                "python3", "Tools/autotest/autotest.py", test_target,
+                "python3", "Tools/autotest/autotest.py",
+                "--speedup", "100",
+                test_target,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=wt_path,
@@ -860,18 +1054,19 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
             sitl_instance_pool.put_nowait(instance_num)
 
         if proc.returncode == 0:
-            test_info["state"] = "SUCCESS"
+            _set_state(test_info, "SUCCESS")
             test_info["log"] += "\nAll tests passed!\n"
         else:
-            test_info["state"] = "FAILURE"
+            _set_state(test_info, "FAILURE")
             test_info["log"] += f"\nTests failed (exit code {proc.returncode})\n"
 
     except asyncio.CancelledError:
-        test_info["state"] = "CANCELLED"
+        _set_state(test_info, "CANCELLED")
         test_info["log"] += "\nTest cancelled by user\n"
     except Exception as e:
-        test_info["state"] = "ERROR"
+        _set_state(test_info, "ERROR")
         test_info["log"] += f"\nUnexpected error: {e}\n"
+        test_info["log"] += traceback.format_exc() + "\n"
         logger.exception("Test runner error")
     finally:
         test_info["process"] = None
@@ -892,8 +1087,35 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
             await loop.run_in_executor(None, shutil.rmtree, test_buildlogs, True)
 
 
+def _extract_error(t: dict) -> str | None:
+    """Extract a concise error reason from a failed test's log."""
+    if t["state"] not in ("FAILURE", "ERROR"):
+        return None
+    log = t.get("log", "").strip()
+    if not log:
+        return None
+    for line in reversed(log.splitlines()[-30:]):
+        line = line.strip()
+        # Build errors
+        if line.startswith("Build failed:") or line.startswith("Build previously failed:"):
+            return line
+        if line.startswith("BUILD FAILED:"):
+            return line
+        if "Build configure failed:" in line:
+            return line
+        # Compile errors (extract the first error: line)
+        if ": error:" in line:
+            return line
+        # Autotest exceptions
+        if "NotAchievedException" in line or "Exception" in line:
+            return line
+        if "FAILED" in line and "tests:" in line:
+            return line
+    return None
+
+
 def test_summary(t: dict) -> dict:
-    return {
+    summary = {
         "test_id": t["test_id"],
         "batch_id": t.get("batch_id"),
         "vehicle": t["vehicle"],
@@ -907,6 +1129,31 @@ def test_summary(t: dict) -> dict:
         "created_at": t["created_at"],
         "finished_at": t.get("finished_at"),
     }
+    error = _extract_error(t)
+    if error:
+        summary["error"] = error
+    return summary
+
+
+def _error_context(t: dict) -> str:
+    """Format error context: test_id, vehicle/target, remote/ref@commit."""
+    commit = t.get("commit") or ""
+    ref = t.get("ref", "")
+    remote = t.get("remote", "")
+
+    # Try to extract resolved commit from log if not in test metadata
+    if not commit:
+        log = t.get("log", "")
+        for line in log.splitlines():
+            if line.startswith("Using pinned commit:") or \
+               line.startswith("Resolved commit:"):
+                commit = line.split(":")[-1].strip()
+                break
+
+    ref_str = f"{remote}/{ref}"
+    if commit:
+        ref_str += f" @ {commit[:12]}"
+    return f"{t['test_id']} | {t['vehicle']} | {ref_str}"
 
 
 # --- Discovery API ---
@@ -927,20 +1174,24 @@ async def list_test_vehicles():
     return {"vehicles": sorted(vehicles)}
 
 
-@app.get("/autotest/api/subtests")
-async def list_subtests(vehicle: str = "Plane"):
-    """List available subtests for a vehicle."""
+async def _get_subtests(vehicle: str) -> list[str]:
+    """Get subtest names for a vehicle. Returns empty list on failure."""
     if not (ARDUPILOT_DIR / "waf").exists():
-        return {"subtests": []}
+        return []
     rc, out = await run_cmd(
         ["python3", "Tools/autotest/autotest.py",
          f"--list-subtests-for-vehicle={vehicle}"],
         cwd=ARDUPILOT_DIR, timeout=30,
     )
     if rc != 0:
-        return {"subtests": []}
-    # Output is space-separated on one line
-    names = [n.strip() for n in out.strip().split() if n.strip()]
+        return []
+    return [n.strip() for n in out.strip().split() if n.strip()]
+
+
+@app.get("/autotest/api/subtests")
+async def list_subtests(vehicle: str = "Plane"):
+    """List available subtests for a vehicle."""
+    names = await _get_subtests(vehicle)
     return {"subtests": [{"name": n} for n in sorted(names)]}
 
 
@@ -973,6 +1224,33 @@ async def api_status():
     }
 
 
+@app.get("/autotest/api/events")
+async def sse_events(request: Request):
+    """Server-Sent Events stream for real-time test state changes."""
+    q: asyncio.Queue = asyncio.Queue(maxsize=256)
+    _sse_clients.append(q)
+
+    async def event_stream():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    data = await asyncio.wait_for(q.get(), timeout=30)
+                    yield f"data: {data}\n\n"
+                except asyncio.TimeoutError:
+                    # Send keepalive comment to prevent proxy/browser timeout
+                    yield ": keepalive\n\n"
+        finally:
+            _sse_clients.remove(q)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/autotest/api/metrics")
 async def api_metrics():
     running_states = ("UPDATING", "BUILDING", "TESTING", "QUEUED")
@@ -989,6 +1267,44 @@ async def api_metrics():
         "pending_tests": len(pending),
         "load_avg_1m": round(load_1m, 1),
     }
+
+
+@app.get("/autotest/api/tests/display-items")
+async def display_items(limit: int = 20, offset: int = 0):
+    """Return tests grouped by batch, paginated by display item count.
+    Each batch = 1 item, each standalone test = 1 item."""
+    # Group all tests by batch_id
+    batches: dict[str, list] = {}
+    standalone: list[dict] = []
+    for t in tests.values():
+        bid = t.get("batch_id")
+        if bid:
+            batches.setdefault(bid, []).append(t)
+        else:
+            standalone.append(t)
+
+    # Build display items with created_at for sorting
+    items = []
+    for bid, batch_tests in batches.items():
+        created = min(t["created_at"] for t in batch_tests)
+        items.append({"batch_id": bid, "created_at": created, "tests": batch_tests})
+    for t in standalone:
+        items.append({"batch_id": None, "created_at": t["created_at"], "tests": [t]})
+
+    items.sort(key=lambda x: x["created_at"], reverse=True)
+    total = len(items)
+    page = items[offset:offset + limit]
+
+    # Serialize tests within each item
+    result = []
+    for item in page:
+        result.append({
+            "batch_id": item["batch_id"],
+            "created_at": item["created_at"],
+            "tests": [test_summary(t) for t in item["tests"]],
+        })
+
+    return {"items": result, "total": total, "limit": limit, "offset": offset}
 
 
 @app.get("/autotest/api/tests")
@@ -1044,6 +1360,108 @@ async def submit_test(req: TestRequest):
     return {"test_id": test_id, "batch_id": batch_id, "status": "submitted"}
 
 
+def _is_suite_target(target: str) -> str | None:
+    """If target is a suite like 'test.Plane' or 'test.QuadPlane', return the vehicle name.
+    Returns None for specific tests like 'test.Plane.ThrottleFailsafe'."""
+    m = re.match(r'^test\.([A-Za-z]+)$', target)
+    return m.group(1) if m else None
+
+
+@app.post("/autotest/api/tests/batch")
+async def submit_batch(req: BatchSubmitRequest):
+    """Submit multiple tests in a single request. All launch in parallel.
+    Suite targets (e.g. 'test.Plane') are expanded into individual subtests."""
+    batch_id = req.batch_id or f"batch-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+
+    # Expand suite targets into individual subtests
+    expanded_tests = []
+    for target in req.tests:
+        suite_vehicle = _is_suite_target(target)
+        if suite_vehicle:
+            subtests = await _get_subtests(suite_vehicle)
+            if subtests:
+                expanded_tests.extend(
+                    f"test.{suite_vehicle}.{name}" for name in subtests
+                )
+                logger.info(
+                    "Expanded %s into %d subtests", target, len(subtests)
+                )
+            else:
+                # Couldn't expand — pass through as-is
+                expanded_tests.append(target)
+        else:
+            expanded_tests.append(target)
+
+    submitted = []
+    for test_target in expanded_tests:
+        test_id = f"{req.vehicle.lower()}-{uuid.uuid4().hex[:8]}"
+        test_info = {
+            "test_id": test_id,
+            "batch_id": batch_id,
+            "vehicle": req.vehicle,
+            "test": test_target,
+            "remote": req.remote,
+            "ref": req.ref,
+            "commit": req.commit,
+            "waf_configure_args": req.waf_configure_args,
+            "waf_build_args": req.waf_build_args,
+            "state": "PENDING",
+            "created_at": time.time(),
+            "finished_at": None,
+            "log": "",
+            "_log_flushed_len": 0,
+            "task": None,
+            "process": None,
+            "worktree": None,
+        }
+        tests[test_id] = test_info
+        task = asyncio.create_task(
+            run_test_async(
+                test_id, req.vehicle, test_target, req.remote, req.ref,
+                req.waf_configure_args, req.waf_build_args,
+                commit=req.commit,
+            )
+        )
+        test_info["task"] = task
+        submitted.append({"test_id": test_id, "test": test_target})
+
+    # Sync remote/vehicle/ref to admin panel (fire-and-forget, skip origin)
+    if req.remote != "origin":
+        asyncio.create_task(_sync_test_to_admin(req.remote, req.vehicle, req.ref))
+
+    return {
+        "batch_id": batch_id,
+        "submitted": submitted,
+        "count": len(submitted),
+    }
+
+
+async def _sync_test_to_admin(remote: str, vehicle: str, ref: str):
+    """Register the tested remote/vehicle/ref in the admin panel."""
+    try:
+        # Get remote URL from git config
+        rc, url = await run_cmd(
+            ["git", "remote", "get-url", remote], cwd=ARDUPILOT_DIR
+        )
+        if rc != 0:
+            return
+        url = url.strip()
+
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                "http://127.0.0.1:8090/admin/api/ensure-release",
+                json={
+                    "remote_name": remote,
+                    "remote_url": url,
+                    "vehicle": vehicle,
+                    "ref": ref,
+                },
+                timeout=10,
+            )
+    except Exception as e:
+        logger.warning(f"Failed to sync test to admin panel: {e}")
+
+
 @app.get("/autotest/api/tests/{test_id}")
 async def get_test(test_id: str):
     if test_id not in tests:
@@ -1076,7 +1494,7 @@ async def cancel_test(test_id: str):
     task = t.get("task")
     if task and not task.done():
         task.cancel()
-    t["state"] = "CANCELLED"
+    _set_state(t, "CANCELLED")
     t["finished_at"] = time.time()
     return {"status": "cancelled"}
 
@@ -1095,6 +1513,7 @@ async def list_batches():
             batches[bid] = {
                 "batch_id": bid,
                 "total": 0, "passed": 0, "failed": 0, "running": 0,
+                "cancelled": 0,
                 "vehicle": t["vehicle"], "remote": t["remote"], "ref": t["ref"],
                 "created_at": t["created_at"],
             }
@@ -1104,6 +1523,8 @@ async def list_batches():
             b["passed"] += 1
         elif t["state"] in ("FAILURE", "ERROR"):
             b["failed"] += 1
+        elif t["state"] == "CANCELLED":
+            b["cancelled"] += 1
         elif t["state"] in ("PENDING", "UPDATING", "BUILDING", "QUEUED", "TESTING"):
             b["running"] += 1
         b["created_at"] = min(b["created_at"], t["created_at"])
@@ -1135,6 +1556,29 @@ async def get_batch(batch_id: str):
         "cancelled": cancelled,
         "tests": batch_tests,
     }
+
+
+@app.post("/autotest/api/batches/{batch_id}/cancel")
+async def cancel_batch(batch_id: str):
+    """Cancel all running tests in a batch."""
+    batch_tests = [t for t in tests.values() if t.get("batch_id") == batch_id]
+    if not batch_tests:
+        raise HTTPException(404, f"Batch '{batch_id}' not found")
+    running_states = ("PENDING", "UPDATING", "BUILDING", "QUEUED", "TESTING")
+    cancelled_count = 0
+    for t in batch_tests:
+        if t["state"] not in running_states:
+            continue
+        proc = t.get("process")
+        if proc:
+            proc.kill()
+        task = t.get("task")
+        if task and not task.done():
+            task.cancel()
+        _set_state(t, "CANCELLED")
+        t["finished_at"] = time.time()
+        cancelled_count += 1
+    return {"status": "cancelled", "cancelled_count": cancelled_count}
 
 
 @app.get("/autotest/api/batches/{batch_id}/wait")
@@ -1198,25 +1642,27 @@ async def batch_summary(batch_id: str):
 
     lines = []
     failures = []
+    error_counts: dict[str, int] = {}  # error -> count (for dedup)
+
+    # Track first occurrence of each unique error for context
+    error_first_test: dict[str, dict] = {}  # error -> first test dict
+
     for t in batch_tests:
         test_name = t["test"].split(".")[-1] if "." in t["test"] else t["test"]
         state = t["state"]
         if state == "SUCCESS":
             lines.append(f"  PASS  {test_name}")
         elif state in ("FAILURE", "ERROR"):
-            # Extract failure reason from last few log lines
-            reason = ""
-            log_lines = t.get("log", "").strip().splitlines()
-            for line in reversed(log_lines[-20:]):
-                if "NotAchievedException" in line or "Exception" in line:
-                    reason = line.strip()
-                    break
-                if "FAILED" in line and "tests:" in line:
-                    reason = line.strip()
-                    break
+            reason = _extract_error(t) or ""
             lines.append(f"  FAIL  {test_name}")
             if reason:
-                failures.append({"test": test_name, "test_id": t["test_id"], "reason": reason})
+                error_counts[reason] = error_counts.get(reason, 0) + 1
+                if reason not in error_first_test:
+                    error_first_test[reason] = t
+                failures.append({
+                    "test": test_name, "test_id": t["test_id"],
+                    "reason": reason,
+                })
         elif state == "CANCELLED":
             lines.append(f"  SKIP  {test_name}")
         else:
@@ -1225,14 +1671,51 @@ async def batch_summary(batch_id: str):
     passed = sum(1 for t in batch_tests if t["state"] == "SUCCESS")
     failed = sum(1 for t in batch_tests if t["state"] in ("FAILURE", "ERROR"))
 
+    # Build the failure details section with context
+    detail_lines = []
+    if failures:
+        if error_counts:
+            top_error = max(error_counts, key=error_counts.get)
+            top_count = error_counts[top_error]
+            if top_count > 1 and top_count >= len(failures) * 0.5:
+                ctx = _error_context(error_first_test[top_error])
+                detail_lines.append(
+                    f"Common error ({top_count}/{len(failures)} tests):"
+                )
+                detail_lines.append(f"  Source: {ctx}")
+                detail_lines.append(f"  Error:  {top_error}")
+                # Show remaining unique errors
+                unique = [
+                    f for f in failures if f["reason"] != top_error
+                ]
+                if unique:
+                    detail_lines.append("")
+                    detail_lines.append("Other errors:")
+                    for f in unique:
+                        ft = next(
+                            (t for t in batch_tests
+                             if t["test_id"] == f["test_id"]), None
+                        )
+                        ctx = _error_context(ft) if ft else f["test_id"]
+                        detail_lines.append(f"  {ctx}")
+                        detail_lines.append(f"    {f['reason']}")
+            else:
+                for f in failures:
+                    ft = next(
+                        (t for t in batch_tests
+                         if t["test_id"] == f["test_id"]), None
+                    )
+                    ctx = _error_context(ft) if ft else f["test_id"]
+                    detail_lines.append(f"  {ctx}")
+                    detail_lines.append(f"    {f['reason']}")
+
     return PlainTextResponse(
         f"Batch {batch_id} — {passed} passed, {failed} failed, "
         f"{still_running} running, {len(batch_tests)} total\n"
         f"Remote: {batch_tests[0]['remote']}/{batch_tests[0]['ref']}\n\n"
         + "\n".join(lines)
-        + ("\n\nFailure details:\n" + "\n".join(
-            f"  {f['test']} ({f['test_id']}): {f['reason']}" for f in failures
-        ) if failures else "")
+        + (("\n\nFailure details:\n" + "\n".join(detail_lines))
+           if detail_lines else "")
         + "\n"
     )
 
@@ -1357,6 +1840,18 @@ async def add_git_remote(req: AddRemoteRequest):
         ["git", "fetch", req.name, "--tags"],
         cwd=ARDUPILOT_DIR, timeout=300,
     )
+
+    # Sync to admin panel so the remote appears in the UI
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                "http://127.0.0.1:8090/admin/api/remotes",
+                json={"name": req.name, "url": req.url, "vehicles": []},
+                timeout=10,
+            )
+    except Exception as e:
+        logger.warning(f"Failed to sync remote to admin panel: {e}")
+
     return {
         "status": "ok",
         "output": f"Added remote {req.name} ({req.url})\n"

@@ -1,0 +1,11 @@
+name = "ardupilot-auth"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+
+routes = [
+  { pattern = "jforbes.us/*", zone_name = "jforbes.us" }
+]
+
+[[kv_namespaces]]
+binding = "AUTH_KV"
+id = "50ecf806a64b43b1b1c30920ea6acb0f"

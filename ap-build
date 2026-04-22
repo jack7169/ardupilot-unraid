@@ -4,9 +4,20 @@
 
 set -euo pipefail
 
-BASE_URL="${AP_BUILD_URL:-http://192.168.50.45:8000}"
+BASE_URL="${AP_BUILD_URL:-http://100.99.196.120:8000}"
 API="${BASE_URL}/api/v1"
 AUTOTEST_API="${BASE_URL}/autotest/api"
+
+# Auth
+AUTH_COOKIE_FILE="${HOME}/.config/ap-build/cookie"
+AUTH_ARGS=()
+if [[ "$BASE_URL" == https://* ]]; then
+    if [[ -n "${AP_AUTH_PASSWORD:-}" ]]; then
+        AUTH_ARGS=(-H "X-Auth-Password: ${AP_AUTH_PASSWORD}")
+    elif [[ -f "$AUTH_COOKIE_FILE" ]]; then
+        AUTH_ARGS=(-H "Cookie: cf_auth=$(cat "$AUTH_COOKIE_FILE")")
+    fi
+fi
 
 # Colors
 RED='\033[0;31m'
@@ -26,7 +37,7 @@ require_cmd jq
 
 api_get() {
     local response
-    response=$(curl -s -w '\n%{http_code}' "${1}" 2>/dev/null) || err "Cannot reach: GET $1"
+    response=$(curl -s -w '\n%{http_code}' ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${1}" 2>/dev/null) || err "Cannot reach: GET $1"
     local code="${response##*$'\n'}"
     local body="${response%$'\n'*}"
     [[ "$code" -ge 200 && "$code" -lt 300 ]] || err "$(echo "$body" | jq -r '.detail // .' 2>/dev/null || echo "$body") (HTTP $code)"
@@ -34,7 +45,7 @@ api_get() {
 }
 api_post() {
     local response
-    response=$(curl -s -w '\n%{http_code}' -X POST "${1}" -H 'Content-Type: application/json' -d "$2" 2>/dev/null) || err "Cannot reach: POST $1"
+    response=$(curl -s -w '\n%{http_code}' ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} -X POST "${1}" -H 'Content-Type: application/json' -d "$2" 2>/dev/null) || err "Cannot reach: POST $1"
     local code="${response##*$'\n'}"
     local body="${response%$'\n'*}"
     [[ "$code" -ge 200 && "$code" -lt 300 ]] || err "$(echo "$body" | jq -r '.detail // .' 2>/dev/null || echo "$body") (HTTP $code)"
@@ -63,6 +74,8 @@ BUILDS:
 
 TESTS:
   ap-build test submit <vehicle> <test1> [test2 ...]  Submit SITL autotest(s)
+    Multiple tests are submitted in a single batch request and run in parallel
+    on the server. The build is shared — only one compile per commit/vehicle.
     --remote <name>                                     Git remote (default: origin)
     --ref <branch|tag|sha>                              Git ref to test (default: master)
     --commit <sha>                                      Pin exact commit SHA (use with --ref)
@@ -70,12 +83,14 @@ TESTS:
     --waf-build "<flags>"                                Extra waf build flags
 
   ap-build test list                                  List recent test runs
+  ap-build test watch <test_id>                       Watch live progress + log output
   ap-build test status <test_id>                      Check test status
   ap-build test logs <test_id> [--tail N] [--follow]  View test logs
   ap-build test cancel <test_id>                      Cancel a running test
 
 BATCHES (multi-test submissions get auto-assigned batch IDs):
   ap-build batch list                                 List all batches
+  ap-build batch watch <batch_id> [--timeout <secs>]  Watch live progress (default timeout 600s)
   ap-build batch status <batch_id>                    Show batch pass/fail counts + test list
   ap-build batch summary <batch_id>                   Compact pass/fail summary (AI-friendly)
   ap-build batch logs <batch_id>                      All logs for every test in the batch
@@ -91,8 +106,13 @@ GIT (autotest repo):
     --remote-url <url>       Remote URL (adds/updates the remote)
     --ref <branch|tag|sha>   Ref to checkout (default: master)
 
+AUTH:
+  ap-build login                                      Log in to remote server
+  ap-build killswitch <on|off>                        Toggle public access killswitch
+
 ENVIRONMENT:
-  AP_BUILD_URL   Base URL (default: http://192.168.50.45:8000)
+  AP_BUILD_URL       Base URL (default: http://100.99.196.120:8000)
+  AP_AUTH_PASSWORD    Password for auto-login (skips interactive prompt)
 
 EXAMPLES:
   ap-build list versions plane
@@ -257,7 +277,7 @@ show_build_logs() {
         local prev_lines=0
         while true; do
             local logs
-            logs=$(curl -sf "${API}/builds/${build_id}/logs" 2>/dev/null || echo "")
+            logs=$(curl -sf ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${API}/builds/${build_id}/logs" 2>/dev/null || echo "")
             if [[ -n "$logs" ]]; then
                 local total_lines
                 total_lines=$(echo "$logs" | wc -l)
@@ -267,7 +287,7 @@ show_build_logs() {
                 fi
             fi
             local state
-            state=$(curl -sf "${API}/builds/${build_id}" 2>/dev/null | jq -r '.progress.state' 2>/dev/null || echo "UNKNOWN")
+            state=$(curl -sf ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${API}/builds/${build_id}" 2>/dev/null | jq -r '.progress.state' 2>/dev/null || echo "UNKNOWN")
             case "$state" in
                 SUCCESS) echo -e "\n${GREEN}Build completed successfully${NC}"; break ;;
                 FAILURE|ERROR|TIMED_OUT) echo -e "\n${RED}Build failed: ${state}${NC}"; break ;;
@@ -293,7 +313,7 @@ download_artifact() {
     [[ -z "$output" ]] && output="${build_id}.tar.gz"
 
     info "Downloading artifact to ${output}..."
-    curl -s -f "${API}/builds/${build_id}/artifact" -o "$output" || err "Artifact not available for build ${build_id}"
+    curl -s -f ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${API}/builds/${build_id}/artifact" -o "$output" || err "Artifact not available for build ${build_id}"
     success "Downloaded: ${output}"
 }
 
@@ -323,14 +343,19 @@ test_submit() {
         esac
     done
 
+    # Re-split any targets that contain spaces (handles $VAR expansion
+    # where a variable like PLANE_TESTS="test.A test.B test.C" is passed
+    # as a single argument)
+    local -a split_targets=()
+    for t in "${test_targets[@]}"; do
+        for word in $t; do
+            split_targets+=("$word")
+        done
+    done
+    test_targets=("${split_targets[@]}")
+
     [[ -z "$vehicle" || ${#test_targets[@]} -eq 0 ]] && \
         err "Usage: ap-build test submit <vehicle> <test1> [test2 ...] [--remote X] [--ref X] [--commit <sha>] [--waf-configure \"flags\"] [--waf-build \"flags\"]"
-
-    # Generate batch ID for multi-test submissions
-    local batch_id=""
-    if [[ ${#test_targets[@]} -gt 1 ]]; then
-        batch_id="batch-$(date +%Y%m%d-%H%M%S)-$(head -c4 /dev/urandom | xxd -p)"
-    fi
 
     # Build waf args arrays
     local configure_args="[]"
@@ -347,44 +372,48 @@ test_submit() {
     else
         info "Submitting ${#test_targets[@]} test(s) for ${vehicle} @ ${remote}/${ref}"
     fi
-    [[ -n "$batch_id" ]] && info "  Batch: ${batch_id}"
     [[ -n "$waf_configure" ]] && info "  waf configure: ${waf_configure}"
     [[ -n "$waf_build" ]] && info "  waf build: ${waf_build}"
 
-    local -a submitted_ids=()
-    for test_target in "${test_targets[@]}"; do
-        local payload
-        payload=$(jq -n \
-            --arg v "$vehicle" \
-            --arg t "$test_target" \
-            --arg r "$remote" \
-            --arg ref "$ref" \
-            --arg commit "$commit" \
-            --argjson wc "$configure_args" \
-            --argjson wb "$build_args" \
-            --arg bid "$batch_id" \
-            '{vehicle: $v, test: $t, remote: $r, ref: $ref, waf_configure_args: $wc, waf_build_args: $wb} + (if $bid != "" then {batch_id: $bid} else {} end) + (if $commit != "" then {commit: $commit} else {} end)')
-
-        local response
-        response=$(api_post "${AUTOTEST_API}/tests" "$payload")
-
-        local test_id
-        test_id=$(echo "$response" | jq -r '.test_id')
-        submitted_ids+=("$test_id")
-        success "  ${test_target} -> ${test_id}"
+    # Build JSON array of test targets
+    local tests_json="[]"
+    for t in "${test_targets[@]}"; do
+        tests_json=$(echo "$tests_json" | jq --arg t "$t" '. + [$t]')
     done
 
+    # Single batch POST — all tests submitted and launched in parallel server-side
+    local payload
+    payload=$(jq -n \
+        --arg v "$vehicle" \
+        --argjson tests "$tests_json" \
+        --arg r "$remote" \
+        --arg ref "$ref" \
+        --arg commit "$commit" \
+        --argjson wc "$configure_args" \
+        --argjson wb "$build_args" \
+        '{vehicle: $v, tests: $tests, remote: $r, ref: $ref, waf_configure_args: $wc, waf_build_args: $wb} + (if $commit != "" then {commit: $commit} else {} end)')
+
+    local response
+    response=$(api_post "${AUTOTEST_API}/tests/batch" "$payload")
+
+    local batch_id count
+    batch_id=$(echo "$response" | jq -r '.batch_id')
+    count=$(echo "$response" | jq -r '.count')
+
+    # Print submitted test IDs
+    echo "$response" | jq -r '.submitted[] | "  \(.test) -> \(.test_id)"'
+
     echo ""
-    echo -e "${BOLD}${#submitted_ids[@]} test(s) submitted${NC}"
-    if [[ -n "$batch_id" ]]; then
+    echo -e "${BOLD}${count} test(s) submitted${NC}"
+    if [[ $count -gt 1 ]]; then
         echo -e "Batch: ${BOLD}${batch_id}${NC}"
-        echo -e "Track progress:"
-        echo -e "  ap-build batch status ${batch_id}"
-        echo -e "  ap-build batch logs ${batch_id}"
+        echo -e "\nWatch progress:"
+        echo -e "  ap-build batch watch ${batch_id}"
     else
-        echo -e "Track progress:"
-        echo -e "  ap-build test status ${submitted_ids[0]}"
-        echo -e "  ap-build test logs ${submitted_ids[0]} --follow"
+        local first_id
+        first_id=$(echo "$response" | jq -r '.submitted[0].test_id')
+        echo -e "\nWatch progress:"
+        echo -e "  ap-build test watch ${first_id}"
     fi
 }
 
@@ -444,7 +473,7 @@ test_logs() {
         local prev_lines=0
         while true; do
             local logs
-            logs=$(curl -sf "${AUTOTEST_API}/tests/${test_id}/logs" 2>/dev/null || echo "")
+            logs=$(curl -sf ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${AUTOTEST_API}/tests/${test_id}/logs" 2>/dev/null || echo "")
             if [[ -n "$logs" ]]; then
                 local total_lines
                 total_lines=$(echo "$logs" | wc -l)
@@ -454,7 +483,7 @@ test_logs() {
                 fi
             fi
             local state
-            state=$(curl -sf "${AUTOTEST_API}/tests/${test_id}" 2>/dev/null | jq -r '.state' 2>/dev/null || echo "UNKNOWN")
+            state=$(curl -sf ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${AUTOTEST_API}/tests/${test_id}" 2>/dev/null | jq -r '.state' 2>/dev/null || echo "UNKNOWN")
             case "$state" in
                 SUCCESS) echo -e "\n${GREEN}Tests passed!${NC}"; break ;;
                 FAILURE|ERROR) echo -e "\n${RED}Tests failed: ${state}${NC}"; break ;;
@@ -465,6 +494,45 @@ test_logs() {
     else
         api_get "${AUTOTEST_API}/tests/${test_id}/logs${tail_param}"
     fi
+}
+
+test_watch() {
+    local test_id="${1:?Usage: ap-build test watch <test_id>}"
+    local prev_len=0
+
+    while true; do
+        local data
+        data=$(curl -sf ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${AUTOTEST_API}/tests/${test_id}" 2>/dev/null) || { sleep 2; continue; }
+
+        local state
+        state=$(echo "$data" | jq -r '.state')
+
+        # Get full log and show new lines
+        local logs
+        logs=$(curl -sf ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${AUTOTEST_API}/tests/${test_id}/logs" 2>/dev/null || echo "")
+        if [[ -n "$logs" ]]; then
+            local cur_len
+            cur_len=$(printf '%s' "$logs" | wc -c)
+            if [[ $cur_len -gt $prev_len ]]; then
+                printf '%s' "$logs" | tail -c +$((prev_len + 1))
+                prev_len=$cur_len
+            fi
+        fi
+
+        # Check terminal states
+        case "$state" in
+            SUCCESS)
+                echo -e "\n${GREEN}Test passed!${NC}"
+                break ;;
+            FAILURE|ERROR)
+                echo -e "\n${RED}Test failed: ${state}${NC}"
+                break ;;
+            CANCELLED)
+                echo -e "\n${YELLOW}Test cancelled${NC}"
+                break ;;
+        esac
+        sleep 2
+    done
 }
 
 test_cancel() {
@@ -596,7 +664,95 @@ TEST: \(.test_id) | \(.test) | \(.state)
 batch_summary() {
     local batch_id="${1:?Usage: ap-build batch summary <batch_id>}"
     # Use the AI-friendly plaintext summary endpoint
-    curl -s "${AUTOTEST_API}/batches/${batch_id}/summary" 2>/dev/null || err "Failed to fetch batch summary"
+    curl -s ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${AUTOTEST_API}/batches/${batch_id}/summary" 2>/dev/null || err "Failed to fetch batch summary"
+}
+
+batch_watch() {
+    local batch_id="${1:?Usage: ap-build batch watch <batch_id>}"; shift
+    local timeout=3600
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --timeout) timeout="${2:?--timeout requires a value}"; shift 2 ;;
+            *) err "Unknown option: $1" ;;
+        esac
+    done
+
+    local deadline=$(( $(date +%s) + timeout ))
+    local prev_passed=0 prev_failed=0 prev_building=""
+
+    while [[ $(date +%s) -lt $deadline ]]; do
+        local data
+        data=$(curl -s --max-time 10 ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${AUTOTEST_API}/batches/${batch_id}" 2>/dev/null) || { sleep 2; continue; }
+
+        local total passed failed running cancelled complete
+        total=$(echo "$data" | jq -r '.total // 0')
+        passed=$(echo "$data" | jq -r '.passed // 0')
+        failed=$(echo "$data" | jq -r '.failed // 0')
+        running=$(echo "$data" | jq -r '.running // 0')
+        cancelled=$(echo "$data" | jq -r '.cancelled // 0')
+        complete=$(echo "$data" | jq -r '.complete // false')
+
+        # Show state transitions (new passes/failures since last poll)
+        if [[ $passed -gt $prev_passed ]]; then
+            local new_passes
+            new_passes=$(echo "$data" | jq -r '[.tests[] | select(.state == "SUCCESS")] | sort_by(.test) | .[-'"$((passed - prev_passed))"':] | .[].test' 2>/dev/null)
+            for t in $new_passes; do
+                local short_name="${t##*.}"
+                echo -e "  ${GREEN}PASS${NC} ${short_name}"
+            done
+        fi
+        if [[ $failed -gt $prev_failed ]]; then
+            local new_fails
+            new_fails=$(echo "$data" | jq -r '[.tests[] | select(.state == "FAILURE" or .state == "ERROR")] | sort_by(.test) | .[-'"$((failed - prev_failed))"':] | .[].test' 2>/dev/null)
+            for t in $new_fails; do
+                local short_name="${t##*.}"
+                echo -e "  ${RED}FAIL${NC} ${short_name}"
+            done
+        fi
+        prev_passed=$passed
+        prev_failed=$failed
+
+        # Show build phase once (fetch logs from first BUILDING test only)
+        local cur_building
+        cur_building=$(echo "$data" | jq -r '[.tests[] | select(.state == "BUILDING")] | length')
+        if [[ "$cur_building" -gt 0 && "$prev_building" != "building" ]]; then
+            echo -e "${CYAN}Building SITL binary (shared across all ${total} tests)...${NC}"
+            prev_building="building"
+        elif [[ "$cur_building" -eq 0 && "$prev_building" == "building" ]]; then
+            echo -e "${CYAN}Build complete, tests running${NC}"
+            prev_building="done"
+        fi
+
+        # Progress line
+        printf "\r${BOLD}[%d/%d]${NC} ${GREEN}%d pass${NC} ${RED}%d fail${NC} %d running  " \
+            $((passed + failed + cancelled)) "$total" "$passed" "$failed" "$running"
+
+        if [[ "$complete" == "true" ]]; then
+            echo ""
+            echo ""
+            echo -e "${BOLD}Batch ${batch_id} complete${NC}"
+            echo -e "  Total:  ${total}"
+            echo -e "  Passed: ${GREEN}${passed}${NC}"
+            echo -e "  Failed: ${RED}${failed}${NC}"
+
+            if [[ $failed -gt 0 ]]; then
+                echo ""
+                echo -e "${RED}Failed tests:${NC}"
+                echo "$data" | jq -r '.tests[] | select(.state == "FAILURE" or .state == "ERROR") | .test' | while read -r tname; do
+                    local short_name="${tname##*.}"
+                    echo -e "  ${RED}x${NC} ${short_name}"
+                done
+            fi
+            return 0
+        fi
+
+        sleep 5
+    done
+
+    echo ""
+    echo -e "${YELLOW}Timeout after ${timeout}s — batch still running (${running} remaining)${NC}"
+    return 1
 }
 
 batch_wait() {
@@ -613,7 +769,7 @@ batch_wait() {
     info "Waiting for batch ${batch_id} to complete (timeout: ${timeout}s)..."
 
     local response
-    response=$(curl -s -w '\n%{http_code}' "${AUTOTEST_API}/batches/${batch_id}/wait?timeout=${timeout}" 2>/dev/null) || err "Cannot reach server"
+    response=$(curl -s -w '\n%{http_code}' ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "${AUTOTEST_API}/batches/${batch_id}/wait?timeout=${timeout}" 2>/dev/null) || err "Cannot reach server"
     local code="${response##*$'\n'}"
     local body="${response%$'\n'*}"
 
@@ -640,6 +796,83 @@ batch_wait() {
         [[ "$failed" == "0" ]] && exit 0 || exit 1
     else
         err "$(echo "$body" | jq -r '.detail // .' 2>/dev/null || echo "$body") (HTTP $code)"
+    fi
+}
+
+# ============================================================
+# AUTH COMMANDS
+# ============================================================
+
+do_login() {
+    local password="${AP_AUTH_PASSWORD:-}"
+    if [[ -z "$password" ]]; then
+        echo -n "Password: "
+        read -rs password
+        echo
+    fi
+    [[ -z "$password" ]] && err "Password required"
+
+    local full_response
+    full_response=$(curl -si -X POST "${BASE_URL}/__auth/api" \
+        -H 'Content-Type: application/json' \
+        -d "$(jq -n --arg p "$password" '{password: $p}')" 2>/dev/null) || err "Cannot reach server"
+
+    local http_code
+    http_code=$(echo "$full_response" | head -1 | grep -o '[0-9][0-9][0-9]')
+
+    if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
+        local cookie_value
+        cookie_value=$(echo "$full_response" | grep -i 'set-cookie:' | grep -o 'cf_auth=[^;]*' | cut -d= -f2)
+
+        if [[ -z "$cookie_value" ]]; then
+            err "Login succeeded but no session cookie received"
+        fi
+
+        mkdir -p "$(dirname "$AUTH_COOKIE_FILE")"
+        echo "$cookie_value" > "$AUTH_COOKIE_FILE"
+        chmod 600 "$AUTH_COOKIE_FILE"
+        success "Logged in — session stored (expires in 24h)"
+    else
+        err "Login failed — check your password"
+    fi
+}
+
+do_killswitch() {
+    local action="${1:?Usage: ap-build killswitch <on|off>}"
+    local enabled
+    case "$action" in
+        on)  enabled=true ;;
+        off) enabled=false ;;
+        *)   err "Usage: ap-build killswitch <on|off>" ;;
+    esac
+
+    # Build auth for this specific call (killswitch may be called before AUTH_ARGS are set)
+    local -a auth=()
+    if [[ -n "${AP_AUTH_PASSWORD:-}" ]]; then
+        auth=(-H "X-Auth-Password: ${AP_AUTH_PASSWORD}")
+    elif [[ -f "$AUTH_COOKIE_FILE" ]]; then
+        auth=(-H "Cookie: cf_auth=$(cat "$AUTH_COOKIE_FILE")")
+    else
+        err "Not logged in. Run 'ap-build login' first or set AP_AUTH_PASSWORD"
+    fi
+
+    local response
+    response=$(curl -s -w '\n%{http_code}' ${auth[@]+"${auth[@]}"} \
+        -X POST "${BASE_URL}/__admin/killswitch" \
+        -H 'Content-Type: application/json' \
+        -d "{\"enabled\": ${enabled}}" 2>/dev/null) || err "Cannot reach server"
+
+    local code="${response##*$'\n'}"
+    local body="${response%$'\n'*}"
+
+    [[ "$code" -ge 200 && "$code" -lt 300 ]] || err "$(echo "$body" | jq -r '.error // .' 2>/dev/null) (HTTP $code)"
+
+    local state
+    state=$(echo "$body" | jq -r '.killswitch')
+    if [[ "$state" == "on" ]]; then
+        echo -e "${RED}Killswitch ON — public access blocked${NC}"
+    else
+        success "Killswitch OFF — public access open"
     fi
 }
 
@@ -672,6 +905,7 @@ case "$cmd" in
         case "$subcmd" in
             submit) test_submit "$@" ;;
             list)   test_list ;;
+            watch)  test_watch "$@" ;;
             status) test_status "$@" ;;
             logs)   test_logs "$@" ;;
             cancel) test_cancel "$@" ;;
@@ -682,6 +916,7 @@ case "$cmd" in
         subcmd="${1:?Usage: ap-build batch <list|status|logs|summary|wait>}"; shift
         case "$subcmd" in
             list)    batch_list ;;
+            watch)   batch_watch "$@" ;;
             status)  batch_status "$@" ;;
             logs)    batch_logs "$@" ;;
             summary) batch_summary "$@" ;;
@@ -700,6 +935,8 @@ case "$cmd" in
             *) err "Unknown git command: $subcmd" ;;
         esac
         ;;
+    login)      do_login ;;
+    killswitch) do_killswitch "$@" ;;
     help|-h|--help) usage ;;
     *) err "Unknown command: $cmd. Run 'ap-build help' for usage." ;;
 esac

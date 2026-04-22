@@ -1,0 +1,78 @@
+version: "3.8"
+
+services:
+  # --- Bundled ArduPilot server (all services in one container) ---
+  ardupilot:
+    build:
+      context: ../..
+      dockerfile: docker/bundled/Dockerfile
+    container_name: ardupilot-bundled
+    restart: always
+    cap_add:
+      - SYS_ADMIN
+    ports:
+      - "8000:8000"
+    networks:
+      default:
+        aliases:
+          - caddy
+    environment:
+      CBS_LOG_LEVEL: ${CBS_LOG_LEVEL:-INFO}
+      CBS_BUILD_TIMEOUT_SEC: ${CBS_BUILD_TIMEOUT_SEC:-900}
+      CBS_REMOTES_RELOAD_TOKEN: ${CBS_REMOTES_RELOAD_TOKEN:-}
+    volumes:
+      # Git-heavy volumes: native Docker volumes (btrfs/ext4 on vDisk, NOT shfs)
+      - autotest-workdir:/data/autotest-workdir:rw
+      - autotest-results:/data/autotest-results:rw
+      - custombuild-base:/data/custombuild-base:rw
+      - builder-workdir:/workdir:rw
+      - shared-ardupilot:/data/shared-ardupilot:rw
+      # Log-heavy volumes: bind mount to array (large storage, metadata-light)
+      - ardupilot-buildlogs:/data/buildlogs:rw
+
+  # --- Tailscale: separate tailnet access (optional sidecar) ---
+  # First run: docker exec ardupilot-tailscale tailscale up
+  # Follow the login URL to bind to your tailnet.
+  # State persists in tailscale-state volume — only needed once.
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: ardupilot-tailscale
+    restart: unless-stopped
+    network_mode: service:ardupilot
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    environment:
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: true
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+    depends_on:
+      - ardupilot
+
+  # --- Cloudflare Tunnel: public ingress (optional sidecar) ---
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: ardupilot-cloudflared
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - ardupilot
+
+volumes:
+  # Native Docker volumes — stored on Docker vDisk (btrfs), fast metadata ops
+  autotest-workdir:
+  autotest-results:
+  custombuild-base:
+  builder-workdir:
+  shared-ardupilot:
+  tailscale-state:
+  # Bind mount — stored on array (shfs), fine for logs
+  ardupilot-buildlogs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${BUILDLOGS_DIR:-/mnt/user/appdata/ardupilot/buildlogs}

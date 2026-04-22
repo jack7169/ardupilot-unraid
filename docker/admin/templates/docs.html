@@ -1,21 +1,22 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
 <head>
     <meta charset="utf-8">
     <title>ArduPilot Firmware Webtools - Docs</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet"
-        integrity="sha384-GLhlTQ8iRABdZLl6O3oVMWSktQOp6b7In1Zl3/Jr59b6EGGoI1aFkw7cmDA6j6gD" crossorigin="anonymous">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet"
+        integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css">
     <style>
         .docs-content { max-width: 900px; margin: 0 auto; }
-        .docs-content h2 { margin-top: 2rem; padding-bottom: 0.3rem; border-bottom: 1px solid #dee2e6; }
+        .docs-content h2 { margin-top: 2rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--bs-border-color); }
         .docs-content h3 { margin-top: 1.5rem; }
-        .docs-content pre { background: #1e1e2e; color: #cdd6f4; padding: 16px; border-radius: 6px; overflow-x: auto; }
-        .docs-content code:not(pre code) { background: #e9ecef; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
+        .docs-content pre { background: var(--bs-tertiary-bg); color: #cdd6f4; padding: 16px; border-radius: 6px; overflow-x: auto; }
+        .docs-content code:not(pre code) { background: var(--bs-tertiary-bg); padding: 2px 6px; border-radius: 3px; font-size: 0.9em; color: var(--bs-body-color); }
         .docs-content table { width: 100%; }
-        .docs-content table th { background: #f8f9fa; }
-        .docs-content table td, .docs-content table th { padding: 8px 12px; border: 1px solid #dee2e6; }
+        .docs-content table th { background: var(--bs-tertiary-bg); color: var(--bs-body-color); }
+        .docs-content table td, .docs-content table th { padding: 8px 12px; border: 1px solid var(--bs-border-color); }
+        .docs-content td.section-header { background: var(--bs-tertiary-bg) !important; color: var(--bs-body-color) !important; }
         .repo-card { transition: transform 0.1s; }
         .repo-card:hover { transform: translateY(-2px); }
     </style>
@@ -24,7 +25,7 @@
         .metrics-pulse { animation: metrics-pulse 1.2s ease-in-out infinite; }
     </style>
 </head>
-<body class="bg-light">
+<body>
     <nav class="navbar bg-dark">
         <div class="container-fluid">
             <a class="navbar-brand" href="/">
@@ -41,7 +42,6 @@
                 <a href="/" class="btn btn-outline-light me-1"><i class="bi bi-hammer me-2"></i>Builder</a>
                 <a href="/admin" class="btn btn-outline-light me-1"><i class="bi bi-gear me-2"></i>Admin</a>
                 <a href="/autotest" class="btn btn-outline-light me-1"><i class="bi bi-bug me-2"></i>Tests</a>
-                <a href="/results/" class="btn btn-outline-light me-1"><i class="bi bi-clipboard-data me-2"></i>Results</a>
                 <a href="/status" class="btn btn-outline-light me-1"><i class="bi bi-heart-pulse me-2"></i>Status</a>
                 <a href="/docs" class="btn btn-outline-light me-1 active"><i class="bi bi-book me-2"></i>Docs</a>
             </div>
@@ -95,7 +95,6 @@
                 <tr><td><strong>Add Build</strong></td><td><a href="/add_build">/add_build</a></td><td>Select vehicle, version, board, and features to build</td></tr>
                 <tr><td><strong>Builder</strong></td><td><a href="/">/</a></td><td>View active/completed builds, download artifacts</td></tr>
                 <tr><td><strong>Admin</strong></td><td><a href="/admin">/admin</a></td><td>Add/remove git remotes, vehicles, and release branches</td></tr>
-                <tr><td><strong>Results</strong></td><td><a href="/results/">/results/</a></td><td>Autotest results and build logs</td></tr>
                 <tr><td><strong>Status</strong></td><td><a href="/status">/status</a></td><td>Live system status dashboard for all components</td></tr>
                 <tr><td><strong>Docs</strong></td><td><a href="/docs">/docs</a></td><td>This page</td></tr>
             </tbody>
@@ -268,9 +267,9 @@ ap-build git update --remote-url https://github.com/user/ardupilot.git \
         <table class="table table-bordered">
             <thead><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr></thead>
             <tbody>
-                <tr><td colspan="3" class="table-secondary"><strong>Discovery</strong></td></tr>
+                <tr><td colspan="3" class="section-header"><strong>Discovery</strong></td></tr>
                 <tr><td><code>GET</code></td><td><code>/api/capabilities</code></td><td>Machine-readable API discovery (all operations, parameters, examples)</td></tr>
-                <tr><td colspan="3" class="table-secondary"><strong>Firmware Builds</strong></td></tr>
+                <tr><td colspan="3" class="section-header"><strong>Firmware Builds</strong></td></tr>
                 <tr><td><code>GET</code></td><td><code>/api/v1/vehicles</code></td><td>List vehicle types</td></tr>
                 <tr><td><code>GET</code></td><td><code>/api/v1/vehicles/{id}/versions</code></td><td>List versions for a vehicle</td></tr>
                 <tr><td><code>GET</code></td><td><code>/api/v1/vehicles/{id}/versions/{vid}/boards</code></td><td>List boards</td></tr>
@@ -280,7 +279,7 @@ ap-build git update --remote-url https://github.com/user/ardupilot.git \
                 <tr><td><code>GET</code></td><td><code>/api/v1/builds/{id}</code></td><td>Get build status</td></tr>
                 <tr><td><code>GET</code></td><td><code>/api/v1/builds/{id}/logs</code></td><td>Get build logs</td></tr>
                 <tr><td><code>GET</code></td><td><code>/api/v1/builds/{id}/artifact</code></td><td>Download build artifact</td></tr>
-                <tr><td colspan="3" class="table-secondary"><strong>SITL Autotest</strong></td></tr>
+                <tr><td colspan="3" class="section-header"><strong>SITL Autotest</strong></td></tr>
                 <tr><td><code>GET</code></td><td><code>/autotest/api/status</code></td><td>Service status (busy/idle)</td></tr>
                 <tr><td><code>GET</code></td><td><code>/autotest/api/vehicles</code></td><td>List testable vehicles</td></tr>
                 <tr><td><code>GET</code></td><td><code>/autotest/api/subtests</code></td><td>List subtests for a vehicle</td></tr>
@@ -290,13 +289,13 @@ ap-build git update --remote-url https://github.com/user/ardupilot.git \
                 <tr><td><code>GET</code></td><td><code>/autotest/api/tests/{id}</code></td><td>Get test status</td></tr>
                 <tr><td><code>GET</code></td><td><code>/autotest/api/tests/{id}/logs</code></td><td>Get test logs</td></tr>
                 <tr><td><code>POST</code></td><td><code>/autotest/api/tests/{id}/cancel</code></td><td>Cancel a test</td></tr>
-                <tr><td colspan="3" class="table-secondary"><strong>Git</strong></td></tr>
+                <tr><td colspan="3" class="section-header"><strong>Git</strong></td></tr>
                 <tr><td><code>POST</code></td><td><code>/autotest/api/git/update</code></td><td>Fetch + checkout ref</td></tr>
                 <tr><td><code>GET</code></td><td><code>/autotest/api/git/remotes</code></td><td>List git remotes</td></tr>
                 <tr><td><code>GET</code></td><td><code>/autotest/api/git/branches</code></td><td>List branches</td></tr>
                 <tr><td><code>GET</code></td><td><code>/autotest/api/git/tags</code></td><td>List tags</td></tr>
                 <tr><td><code>POST</code></td><td><code>/autotest/api/git/add-remote</code></td><td>Add a git remote</td></tr>
-                <tr><td colspan="3" class="table-secondary"><strong>Admin</strong></td></tr>
+                <tr><td colspan="3" class="section-header"><strong>Admin</strong></td></tr>
                 <tr><td><code>GET</code></td><td><code>/admin/api/remotes</code></td><td>List build remotes</td></tr>
                 <tr><td><code>POST</code></td><td><code>/admin/api/remotes</code></td><td>Add a build remote</td></tr>
                 <tr><td><code>PUT</code></td><td><code>/admin/api/remotes/{name}</code></td><td>Update a remote</td></tr>
@@ -330,7 +329,7 @@ ap-build git update --remote-url https://github.com/user/ardupilot.git \
         </table>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js" integrity="sha384-w76AqPfDkMBDXo30jS1Sgez6pr3x5MlQ1ZAGC+nuZB+EYdgRZgiwxhTBTkF7CXvN" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
     <script src="/admin/static/js/metrics.js"></script>
 </body>
 </html>

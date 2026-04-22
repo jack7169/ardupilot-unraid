@@ -1,18 +1,18 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
 <head>
     <meta charset="utf-8">
     <title>ArduPilot Firmware Webtools - Admin</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet"
-        integrity="sha384-GLhlTQ8iRABdZLl6O3oVMWSktQOp6b7In1Zl3/Jr59b6EGGoI1aFkw7cmDA6j6gD" crossorigin="anonymous">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet"
+        integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css">
     <style>
         @keyframes metrics-pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
         .metrics-pulse { animation: metrics-pulse 1.2s ease-in-out infinite; }
     </style>
 </head>
-<body class="bg-light">
+<body>
     <nav class="navbar bg-dark">
         <div class="container-fluid">
             <a class="navbar-brand" href="/">
@@ -29,7 +29,6 @@
                 <a href="/" class="btn btn-outline-light me-1"><i class="bi bi-hammer me-2"></i>Builder</a>
                 <a href="/admin" class="btn btn-outline-light me-1 active"><i class="bi bi-gear me-2"></i>Admin</a>
                 <a href="/autotest" class="btn btn-outline-light me-1"><i class="bi bi-bug me-2"></i>Tests</a>
-                <a href="/results/" class="btn btn-outline-light me-1"><i class="bi bi-clipboard-data me-2"></i>Results</a>
                 <a href="/status" class="btn btn-outline-light me-1"><i class="bi bi-heart-pulse me-2"></i>Status</a>
                 <a href="/docs" class="btn btn-outline-light me-1"><i class="bi bi-book me-2"></i>Docs</a>
             </div>
@@ -251,7 +250,7 @@
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js" integrity="sha384-w76AqPfDkMBDXo30jS1Sgez6pr3x5MlQ1ZAGC+nuZB+EYdgRZgiwxhTBTkF7CXvN" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
     <script>
         const API = '/admin/api';
         let remotesData = [];
@@ -315,7 +314,7 @@
                         </div>
                     </div>
                     <div class="card-body p-0">
-                        ${(remote.vehicles || []).map(vehicle => `
+                        ${(remote.vehicles || []).filter(v => (v.releases || []).length > 0).map(vehicle => `
                             <div class="border-bottom px-3 py-2">
                                 <div class="d-flex justify-content-between align-items-center mb-1">
                                     <strong><i class="bi bi-airplane me-2"></i>${esc(vehicle.name)}</strong>
@@ -332,7 +331,7 @@
                                     </div>
                                 </div>
                                 <table class="table table-sm table-hover mb-0">
-                                    <thead class="table-light">
+                                    <thead class="table-dark">
                                         <tr><th>Type</th><th>Version</th><th>Commit/Ref</th><th>Artifacts</th><th></th></tr>
                                     </thead>
                                     <tbody>
@@ -353,7 +352,7 @@
                                 </table>
                             </div>
                         `).join('')}
-                        ${(remote.vehicles || []).length === 0 ? '<div class="px-3 py-2 text-muted">No vehicles configured</div>' : ''}
+                        ${(remote.vehicles || []).filter(v => (v.releases || []).length > 0).length === 0 ? '<div class="px-3 py-2 text-muted">No vehicles with releases configured</div>' : ''}
                     </div>
                 </div>
             `).join('');

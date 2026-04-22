@@ -3,4 +3,4 @@
 	url = git@github.com:jack7169/ardupilot-jack.git
 [submodule "custombuild"]
 	path = custombuild
-	url = https://github.com/ArduPilot/CustomBuild.git
+	url = https://github.com/jack7169/CustomBuild.git

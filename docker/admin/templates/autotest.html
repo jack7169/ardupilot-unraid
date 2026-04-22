@@ -1,11 +1,11 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
 <head>
     <meta charset="utf-8">
     <title>ArduPilot Firmware Webtools - Tests</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet"
-        integrity="sha384-GLhlTQ8iRABdZLl6O3oVMWSktQOp6b7In1Zl3/Jr59b6EGGoI1aFkw7cmDA6j6gD" crossorigin="anonymous">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet"
+        integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css">
     <style>
         .state-badge { font-size: 0.8em; }
@@ -17,13 +17,51 @@
         .state-CANCELLED { background-color: #6c757d !important; }
         .status-idle { color: #28a745; }
         .status-busy { color: #0d6efd; }
+        #status-bar { background-color: rgb(39, 43, 47) !important; color: var(--bs-body-color) !important; }
+        .batch-header td { background-color: rgb(33, 37, 41) !important; color: var(--bs-body-color) !important; }
+        #tests-body .text-success { color: #75b798 !important; }
+        #tests-body .text-danger { color: #ea868f !important; }
+        #tests-body .text-primary { color: #6ea8fe !important; }
+        #tests-body .text-secondary { color: #a7acb1 !important; }
+        #tests-body code { color: #a8b3bf; }
+        #tests-body a { color: #6ea8fe; }
+
+        /* Resizable table columns */
+        #tests-table { table-layout: fixed; width: 100%; border-collapse: collapse; }
+        #tests-table th, #tests-table td {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            box-sizing: border-box;
+            padding: 0.5rem;
+        }
+        #tests-table th {
+            position: relative;
+            user-select: none;
+        }
+        .col-resize-handle {
+            position: absolute;
+            right: 0;
+            top: 25%;
+            bottom: 25%;
+            width: 5px;
+            cursor: col-resize;
+            z-index: 1;
+            border-right: 1px solid var(--bs-border-color);
+        }
+        .col-resize-handle:hover,
+        .col-resize-handle.active {
+            border-right: 2px solid #0d6efd;
+            top: 0;
+            bottom: 0;
+        }
     </style>
     <style>
         @keyframes metrics-pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
         .metrics-pulse { animation: metrics-pulse 1.2s ease-in-out infinite; }
     </style>
 </head>
-<body class="bg-light">
+<body>
     <nav class="navbar bg-dark">
         <div class="container-fluid">
             <a class="navbar-brand" href="/">
@@ -40,7 +78,6 @@
                 <a href="/" class="btn btn-outline-light me-1"><i class="bi bi-hammer me-2"></i>Builder</a>
                 <a href="/admin" class="btn btn-outline-light me-1"><i class="bi bi-gear me-2"></i>Admin</a>
                 <a href="/autotest" class="btn btn-outline-light me-1 active"><i class="bi bi-bug me-2"></i>Tests</a>
-                <a href="/results/" class="btn btn-outline-light me-1"><i class="bi bi-clipboard-data me-2"></i>Results</a>
                 <a href="/status" class="btn btn-outline-light me-1"><i class="bi bi-heart-pulse me-2"></i>Status</a>
                 <a href="/docs" class="btn btn-outline-light me-1"><i class="bi bi-book me-2"></i>Docs</a>
             </div>
@@ -50,7 +87,7 @@
     <div class="container-fluid px-3 py-3">
 
         <!-- Status Bar -->
-        <div class="alert alert-light d-flex align-items-center mb-3" id="status-bar">
+        <div class="alert alert-secondary d-flex align-items-center mb-3" id="status-bar">
             <i class="bi bi-circle-fill me-2 status-idle" id="status-dot"></i>
             <span id="status-text">Checking...</span>
             <span class="ms-auto text-muted small" id="status-repo"></span>
@@ -85,7 +122,7 @@
                         <label class="form-label">Ref</label>
                         <div class="input-group">
                             <input type="text" class="form-control" id="testRef" value="master" placeholder="branch/tag/SHA" list="refSuggestions">
-                            <button class="btn btn-outline-dark" type="button" onclick="loadBranches()" title="Load branches"><i class="bi bi-arrow-clockwise"></i></button>
+                            <button class="btn btn-outline-secondary" type="button" onclick="loadBranches()" title="Load branches"><i class="bi bi-arrow-clockwise"></i></button>
                         </div>
                         <datalist id="refSuggestions"></datalist>
                     </div>
@@ -150,8 +187,18 @@
             </div>
             <div class="card-body p-0">
                 <div class="table-responsive">
-                    <table class="table table-hover mb-0">
-                        <thead class="table-light">
+                    <table class="table table-hover mb-0" id="tests-table">
+                        <colgroup>
+                            <col style="width:19%">
+                            <col style="width:6.3%">
+                            <col style="width:10%">
+                            <col style="width:26.8%">
+                            <col style="width:13.3%">
+                            <col style="width:10.7%">
+                            <col style="width:6%">
+                            <col style="width:7.9%">
+                        </colgroup>
+                        <thead class="table-dark">
                             <tr>
                                 <th>Test ID</th>
                                 <th>Vehicle</th>
@@ -218,7 +265,7 @@
                             <button class="btn btn-sm btn-outline-primary w-100" onclick="gitUpdate()"><i class="bi bi-download me-1"></i>Fetch & Checkout</button>
                         </div>
                     </div>
-                    <pre class="mt-2 p-2 bg-light border rounded small d-none" id="git-output"></pre>
+                    <pre class="mt-2 p-2 border rounded small d-none" id="git-output"></pre>
                 </div>
             </div>
         </div>
@@ -251,8 +298,8 @@
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"
-        integrity="sha384-w76AqPfDkMBDXo30jS1Sgez6pr3x5MlQ1ZAGC+nuZB+EYdgRZgiwxhTBTkF7CXvN" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
     <script>
         const API = '/autotest/api';
         let logPollInterval = null;
@@ -284,34 +331,44 @@
         }
 
         // --- Tests ---
+        // Server-side grouping and pagination via /display-items endpoint
+        let displayItems = [];
+        let displayTotal = 0;
+        let totalTestCount = 0;
+
         async function fetchTests() {
             try {
-                const perPage = parseInt(document.getElementById('perPage').value);
-                let url = `${API}/tests`;
-                if (perPage > 0) {
-                    const offset = currentPage * perPage;
-                    url += `?limit=${perPage}&offset=${offset}`;
-                }
-                const resp = await fetch(url);
-                const tests = await resp.json();
-                // Get total from header or status endpoint
-                const totalHeader = resp.headers.get('X-Total-Count');
-                if (totalHeader) {
-                    totalTests = parseInt(totalHeader);
-                } else if (perPage > 0 && tests.length < perPage && currentPage === 0) {
-                    totalTests = tests.length;
-                }
-                renderTests(tests);
-                updatePagination(perPage);
+                const perPage = parseInt(document.getElementById('perPage').value) || 20;
+                const offset = currentPage * perPage;
+                const resp = await fetch(`${API}/tests/display-items?limit=${perPage}&offset=${offset}`);
+                const data = await resp.json();
+                displayItems = data.items;
+                displayTotal = data.total;
+                totalTestCount = data.items.reduce((n, item) => n + item.tests.length, 0);
+                renderPage();
             } catch (e) {
                 document.getElementById('tests-body').innerHTML =
                     '<tr><td colspan="8" class="text-center text-danger">Failed to load tests</td></tr>';
             }
         }
 
-        function updatePagination(perPage) {
+        async function fetchSingleTest(testId) {
+            try {
+                const resp = await fetch(`${API}/tests/${testId}`);
+                if (!resp.ok) return null;
+                return await resp.json();
+            } catch { return null; }
+        }
+
+        function renderPage() {
+            renderDisplayItems(displayItems, totalTestCount);
+            updatePagination();
+        }
+
+        function updatePagination() {
+            const perPage = parseInt(document.getElementById('perPage').value) || 20;
             const footer = document.getElementById('pagination-footer');
-            if (perPage === 0 || totalTests <= perPage) {
+            if (perPage === 0 || displayTotal <= perPage) {
                 footer.style.display = 'none';
                 footer.classList.add('d-none');
                 return;
@@ -319,10 +376,10 @@
             footer.style.display = '';
             footer.classList.remove('d-none');
             footer.style.setProperty('display', 'flex', 'important');
-            const totalPages = Math.ceil(totalTests / perPage);
+            const totalPages = Math.ceil(displayTotal / perPage);
             document.getElementById('prevBtn').disabled = currentPage <= 0;
             document.getElementById('nextBtn').disabled = currentPage >= totalPages - 1;
-            document.getElementById('pageInfo').textContent = `Page ${currentPage + 1} of ${totalPages} (${totalTests} total)`;
+            document.getElementById('pageInfo').textContent = `Page ${currentPage + 1} of ${totalPages} (${displayTotal} items)`;
         }
 
         function changePage(delta) {
@@ -344,49 +401,209 @@
             return `${Math.floor(elapsed/3600)}h ${Math.floor((elapsed%3600)/60)}m`;
         }
 
+        function batchDuration(batchTests) {
+            const starts = batchTests.map(t => t.created_at).filter(Boolean);
+            const ends = batchTests.map(t => t.finished_at).filter(Boolean);
+            if (starts.length === 0) return '-';
+            const earliest = Math.min(...starts);
+            const running = batchTests.some(t => ['PENDING','UPDATING','BUILDING','QUEUED','TESTING'].includes(t.state));
+            const latest = running ? Date.now()/1000 : (ends.length > 0 ? Math.max(...ends) : null);
+            if (!latest) return '-';
+            return fmtDuration(earliest, latest);
+        }
+
+        // Track which batches are expanded so re-renders preserve state
+        const expandedBatches = new Set();
+
         let showBatchCol = false;
-        let lastTests = [];
 
         function toggleGroupCol() {
             showBatchCol = !showBatchCol;
             document.getElementById('groupColHeader').textContent = showBatchCol ? 'Batch ID' : 'Remote / Ref';
             document.getElementById('toggleColLabel').textContent = showBatchCol ? 'Remote / Ref' : 'Batch ID';
-            renderTests(lastTests);
+            renderPage();
         }
 
-        function renderTests(tests) {
-            lastTests = tests;
+        function renderDisplayItems(items, totalTestCount) {
             const tbody = document.getElementById('tests-body');
-            document.getElementById('test-count').textContent = `${tests.length} test(s)`;
+            document.getElementById('test-count').textContent = `${totalTestCount} test(s)`;
 
-            if (tests.length === 0) {
+            if (items.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">No tests yet. Submit one above.</td></tr>';
                 return;
             }
 
-            tbody.innerHTML = tests.map(t => {
-                const isRunning = ['PENDING', 'UPDATING', 'BUILDING', 'QUEUED', 'TESTING'].includes(t.state);
-                const groupCol = showBatchCol
-                    ? (t.batch_id ? `<code class="small">${esc(t.batch_id)}</code>` : '<span class="text-muted">-</span>')
-                    : remoteRefLink(t.remote, t.ref);
-                return `<tr>
-                    <td><code class="small">${esc(t.test_id)}</code></td>
-                    <td>${esc(t.vehicle)}</td>
-                    <td><code class="small">${esc(t.test)}</code></td>
-                    <td>${groupCol}</td>
-                    <td class="small text-muted">${fmtTime(t.created_at)}</td>
-                    <td class="small text-muted">${fmtDuration(t.created_at, t.finished_at)}</td>
-                    <td><span class="badge state-badge state-${t.state}">${t.state}</span></td>
-                    <td>
-                        <button class="btn btn-sm btn-outline-primary me-1" onclick="showLogs('${esc(t.test_id)}')">
-                            <i class="bi bi-file-text"></i>
-                        </button>
-                        ${isRunning ? `<button class="btn btn-sm btn-outline-danger" onclick="cancelTest('${esc(t.test_id)}')">
-                            <i class="bi bi-x-circle"></i>
-                        </button>` : ''}
-                    </td>
-                </tr>`;
-            }).join('');
+            let html = '';
+            for (const item of items) {
+                if (item.batch_id) {
+                    // Batch row
+                    const batchTests = item.tests;
+                    const passed = batchTests.filter(t => t.state === 'SUCCESS').length;
+                    const failed = batchTests.filter(t => ['FAILURE','ERROR'].includes(t.state)).length;
+                    const cancelled = batchTests.filter(t => t.state === 'CANCELLED').length;
+                    const running = batchTests.filter(t => ['PENDING','UPDATING','BUILDING','QUEUED','TESTING'].includes(t.state)).length;
+                    const total = batchTests.length;
+                    const first = batchTests[0];
+                    let batchState;
+                    if (running > 0) {
+                        // Show the most advanced in-progress state
+                        const states = batchTests.map(t => t.state);
+                        if (states.includes('TESTING')) batchState = 'TESTING';
+                        else if (states.includes('QUEUED')) batchState = 'QUEUED';
+                        else if (states.includes('BUILDING')) batchState = 'BUILDING';
+                        else if (states.includes('UPDATING')) batchState = 'UPDATING';
+                        else batchState = 'PENDING';
+                    } else {
+                        if (failed > 0) {
+                            const hasFailure = batchTests.some(t => t.state === 'FAILURE');
+                            batchState = hasFailure ? 'FAILURE' : 'ERROR';
+                        } else {
+                            batchState = passed === 0 && cancelled > 0 ? 'CANCELLED' : 'SUCCESS';
+                        }
+                    }
+                    const safeClass = `batch-${item.batch_id.replace(/[^a-zA-Z0-9]/g,'_')}`;
+
+                    const isExpanded = expandedBatches.has(item.batch_id);
+                    const vehicles = [...new Set(batchTests.map(t => t.vehicle))].join(', ');
+
+                    html += `<tr class="batch-header" style="cursor:pointer" onclick="toggleBatch('${esc(item.batch_id)}', '${safeClass}')">
+                        <td><i class="bi bi-chevron-${isExpanded ? 'down' : 'right'} me-1"></i><code class="small" title="${esc(item.batch_id)}">${esc(item.batch_id)}</code></td>
+                        <td>${esc(vehicles)}</td>
+                        <td class="small"><strong>${total} tests</strong> &mdash;
+                            <span class="text-success">${passed} pass</span>,
+                            <span class="text-danger">${failed} fail</span>${cancelled > 0 ? `, <span class="text-secondary">${cancelled} cancelled</span>` : ''}${running > 0 ? `, <span class="text-primary">${running} running</span>` : ''}</td>
+                        <td>${remoteRefLink(first.remote, first.ref)}</td>
+                        <td class="small text-muted">${fmtTime(first.created_at)}</td>
+                        <td class="small text-muted live-duration" ${running > 0 ? `data-start="${Math.min(...batchTests.map(t=>t.created_at).filter(Boolean))}"` : ''}>${batchDuration(batchTests)}</td>
+                        <td><span class="badge state-badge state-${batchState}">${batchState}</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary me-1" onclick="event.stopPropagation(); showBatchLogs('${esc(item.batch_id)}')">
+                                <i class="bi bi-file-text"></i>
+                            </button>
+                            ${running > 0 ? `<button class="btn btn-sm btn-outline-danger" onclick="event.stopPropagation(); cancelBatch('${esc(item.batch_id)}')">
+                                <i class="bi bi-x-circle"></i>
+                            </button>` : ''}
+                        </td>
+                    </tr>`;
+
+                    for (const t of batchTests) {
+                        const isRunning = ['PENDING', 'UPDATING', 'BUILDING', 'QUEUED', 'TESTING'].includes(t.state);
+                        html += `<tr class="${safeClass}${isExpanded ? '' : ' d-none'}">
+                            <td class="ps-4"><code class="small text-muted">${esc(t.test_id)}</code></td>
+                            <td></td>
+                            <td><code class="small">${esc(t.test)}</code></td>
+                            <td></td>
+                            <td class="small text-muted">${fmtTime(t.created_at)}</td>
+                            <td class="small text-muted live-duration" ${isRunning && t.created_at ? `data-start="${t.created_at}"` : ''}>${fmtDuration(t.created_at, t.finished_at)}</td>
+                            <td><span class="badge state-badge state-${t.state}">${t.state}</span></td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-primary me-1" onclick="event.stopPropagation(); showLogs('${esc(t.test_id)}')">
+                                    <i class="bi bi-file-text"></i>
+                                </button>
+                                ${isRunning ? `<button class="btn btn-sm btn-outline-danger" onclick="event.stopPropagation(); cancelTest('${esc(t.test_id)}')">
+                                    <i class="bi bi-x-circle"></i>
+                                </button>` : ''}
+                            </td>
+                        </tr>`;
+                    }
+                } else {
+                    // Standalone test
+                    const t = item.tests[0];
+                    const isRunning = ['PENDING', 'UPDATING', 'BUILDING', 'QUEUED', 'TESTING'].includes(t.state);
+                    const groupCol = showBatchCol
+                        ? '<span class="text-muted">-</span>'
+                        : remoteRefLink(t.remote, t.ref);
+                    html += `<tr>
+                        <td><code class="small">${esc(t.test_id)}</code></td>
+                        <td>${esc(t.vehicle)}</td>
+                        <td><code class="small">${esc(t.test)}</code></td>
+                        <td>${groupCol}</td>
+                        <td class="small text-muted">${fmtTime(t.created_at)}</td>
+                        <td class="small text-muted live-duration" ${isRunning && t.created_at ? `data-start="${t.created_at}"` : ''}>${fmtDuration(t.created_at, t.finished_at)}</td>
+                        <td><span class="badge state-badge state-${t.state}">${t.state}</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary me-1" onclick="showLogs('${esc(t.test_id)}')">
+                                <i class="bi bi-file-text"></i>
+                            </button>
+                            ${isRunning ? `<button class="btn btn-sm btn-outline-danger" onclick="cancelTest('${esc(t.test_id)}')">
+                                <i class="bi bi-x-circle"></i>
+                            </button>` : ''}
+                        </td>
+                    </tr>`;
+                }
+            }
+
+            tbody.innerHTML = html;
+            // Only auto-fit when test count changes (not on every state update)
+            if (totalTestCount !== _lastAutoFitCount) {
+                _lastAutoFitCount = totalTestCount;
+                autoFitColumns();
+            }
+        }
+
+        // --- Auto-fit column widths based on content ---
+        let manualResize = false;
+        let _lastAutoFitCount = -1;
+        const _measure = document.createElement('span');
+        _measure.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;font:inherit;';
+
+        function autoFitColumns() {
+            if (manualResize) return;
+            const table = document.getElementById('tests-table');
+            if (!table) return;
+            const colEls = table.querySelectorAll('colgroup col');
+            const rows = table.querySelectorAll('tbody tr');
+            const headers = table.querySelectorAll('thead th');
+            const numCols = colEls.length;
+            if (rows.length === 0) return;
+
+            // Temporarily switch to auto layout to measure natural widths
+            table.style.tableLayout = 'auto';
+            colEls.forEach(col => col.style.width = '');
+
+            // Measure each header and sample of body cells
+            const maxW = new Array(numCols).fill(0);
+            const minW = 40;
+
+            // Measure headers
+            headers.forEach((th, i) => {
+                _measure.style.font = getComputedStyle(th).font;
+                _measure.textContent = th.textContent;
+                document.body.appendChild(_measure);
+                maxW[i] = Math.max(maxW[i], _measure.offsetWidth + 24); // padding
+                _measure.remove();
+            });
+
+            // Measure visible body rows (sample up to 30 for performance)
+            const sampleRows = Array.from(rows).filter(r => !r.classList.contains('d-none')).slice(0, 30);
+            for (const row of sampleRows) {
+                const cells = row.querySelectorAll('td');
+                cells.forEach((td, i) => {
+                    if (i >= numCols) return;
+                    _measure.style.font = getComputedStyle(td).font;
+                    _measure.textContent = td.textContent;
+                    document.body.appendChild(_measure);
+                    maxW[i] = Math.max(maxW[i], _measure.offsetWidth + 24);
+                    _measure.remove();
+                });
+            }
+
+            // Enforce minimums, then distribute proportionally to table width
+            const tableWidth = table.parentElement.offsetWidth;
+            maxW.forEach((w, i) => maxW[i] = Math.max(minW, w));
+            const totalContent = maxW.reduce((a, b) => a + b, 0);
+
+            // Scale to fit table, but don't shrink any column below its content
+            if (totalContent <= tableWidth) {
+                // Extra space: distribute proportionally
+                const scale = tableWidth / totalContent;
+                maxW.forEach((w, i) => { colEls[i].style.width = (w * scale) + 'px'; });
+            } else {
+                // Content wider than table: use natural proportions (scrollbar appears)
+                maxW.forEach((w, i) => { colEls[i].style.width = w + 'px'; });
+            }
+
+            table.style.tableLayout = 'fixed';
         }
 
         // --- GitHub links ---
@@ -515,29 +732,45 @@
             const wafConfigureArgs = wafCfg ? wafCfg.split(/\s+/).filter(Boolean) : [];
             const wafBuildArgs = wafBld ? wafBld.split(/\s+/).filter(Boolean) : [];
 
-            let submitted = 0;
-            for (const target of testTargets) {
-                const body = { vehicle, test: target, remote, ref, waf_configure_args: wafConfigureArgs, waf_build_args: wafBuildArgs };
-                try {
-                    const resp = await fetch(`${API}/tests`, {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify(body),
-                    });
-                    if (resp.ok) submitted++;
-                    else {
-                        const err = await resp.json();
-                        alert(`Failed to submit ${target}: ${err.detail || 'Unknown error'}`);
-                    }
-                } catch (e) {
-                    alert(`Failed to submit ${target}: ${e.message}`);
+            // Single batch request — all tests launch in parallel server-side
+            const body = {
+                vehicle, tests: testTargets, remote, ref,
+                waf_configure_args: wafConfigureArgs,
+                waf_build_args: wafBuildArgs,
+            };
+            try {
+                const resp = await fetch(`${API}/tests/batch`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body),
+                });
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    alert(`Failed to submit: ${err.detail || 'Unknown error'}`);
+                    return;
                 }
-            }
-
-            if (submitted > 0) {
-                alert(`${submitted} test(s) submitted`);
+                const data = await resp.json();
+                alert(`${data.count} test(s) submitted (batch: ${data.batch_id})`);
                 fetchTests();
                 fetchStatus();
+            } catch (e) {
+                alert(`Failed to submit: ${e.message}`);
+            }
+        }
+
+        function toggleBatch(batchId, safeClass) {
+            if (expandedBatches.has(batchId)) {
+                expandedBatches.delete(batchId);
+            } else {
+                expandedBatches.add(batchId);
+            }
+            document.querySelectorAll(`.${safeClass}`).forEach(r => r.classList.toggle('d-none'));
+            // Update chevron icon on the batch row
+            const batchRow = event.currentTarget;
+            const icon = batchRow.querySelector('i.bi');
+            if (icon) {
+                icon.classList.toggle('bi-chevron-right');
+                icon.classList.toggle('bi-chevron-down');
             }
         }
 
@@ -552,7 +785,72 @@
             }
         }
 
+        async function cancelBatch(batchId) {
+            if (!confirm(`Cancel all running tests in batch ${batchId}?`)) return;
+            try {
+                const resp = await fetch(`${API}/batches/${batchId}/cancel`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}' });
+                const data = await resp.json();
+                fetchTests();
+                fetchStatus();
+            } catch (e) {
+                alert('Failed to cancel batch: ' + e.message);
+            }
+        }
+
         // --- Logs Modal ---
+        function showBatchLogs(batchId) {
+            document.getElementById('logModalLabel').textContent = `Batch Summary: ${batchId}`;
+            document.getElementById('logTextArea').value = 'Loading...';
+            new bootstrap.Modal(document.getElementById('logModal')).show();
+
+            async function pollBatchLogs() {
+                try {
+                    // Fetch summary, details, and logs in parallel
+                    const [summaryResp, detailResp, logsResp] = await Promise.all([
+                        fetch(`${API}/batches/${batchId}/summary`),
+                        fetch(`${API}/batches/${batchId}`),
+                        fetch(`${API}/batches/${batchId}/logs`),
+                    ]);
+                    const summary = await summaryResp.text();
+                    const detail = await detailResp.json();
+                    const logsData = await logsResp.json();
+
+                    // Extract the build section from the first test's log (up to "=== Running:")
+                    let buildLog = '';
+                    if (logsData.tests && logsData.tests.length > 0) {
+                        const firstLog = logsData.tests[0].log || '';
+                        const runIdx = firstLog.indexOf('=== Running:');
+                        if (runIdx > 0) {
+                            buildLog = firstLog.substring(0, runIdx).trim();
+                        } else if (firstLog.includes('=== Copying')) {
+                            buildLog = firstLog.trim();
+                        }
+                    }
+
+                    // Build per-test duration table
+                    let durationTable = '\nTest Results:\n' + '-'.repeat(70) + '\n';
+                    for (const t of detail.tests) {
+                        const name = t.test.split('.').pop();
+                        const dur = t.finished_at && t.created_at
+                            ? `${Math.round(t.finished_at - t.created_at)}s`
+                            : (t.created_at ? 'running...' : '-');
+                        const state = t.state.padEnd(10);
+                        durationTable += `  ${state} ${name.padEnd(40)} ${dur}\n`;
+                    }
+
+                    const ta = document.getElementById('logTextArea');
+                    ta.value = (buildLog ? buildLog + '\n\n' + '='.repeat(70) + '\n\n' : '')
+                        + summary + '\n' + durationTable;
+                    if (document.getElementById('autoScrollSwitch').checked) {
+                        ta.scrollTop = ta.scrollHeight;
+                    }
+                } catch (e) { /* ignore */ }
+            }
+
+            pollBatchLogs();
+            logPollInterval = setInterval(pollBatchLogs, 3000);
+        }
+
         function showLogs(testId) {
             document.getElementById('logModalLabel').textContent = `Test Log: ${testId}`;
             document.getElementById('logTextArea').value = 'Loading...';
@@ -580,6 +878,9 @@
                 logPollInterval = null;
             }
         }
+
+        // Stop polling when modal is closed by any means (backdrop, Escape, button)
+        document.getElementById('logModal').addEventListener('hidden.bs.modal', stopLogPolling);
 
         // --- Git ---
         async function fetchGitRemotes() {
@@ -654,14 +955,89 @@
             }
         }
 
+        // --- Resizable columns ---
+        (function() {
+            const table = document.getElementById('tests-table');
+            const headers = table.querySelectorAll('thead th');
+            const colEls = table.querySelectorAll('colgroup col');
+
+            headers.forEach((th, i) => {
+                if (i === headers.length - 1) return; // skip last column
+                const handle = document.createElement('div');
+                handle.className = 'col-resize-handle';
+                th.appendChild(handle);
+
+                let startX, startW, nextStartW;
+
+                handle.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    manualResize = true;
+                    startX = e.pageX;
+                    startW = headers[i].getBoundingClientRect().width;
+                    nextStartW = headers[i + 1].getBoundingClientRect().width;
+                    handle.classList.add('active');
+
+                    function onMouseMove(e) {
+                        const dx = e.pageX - startX;
+                        const newW = Math.max(40, startW + dx);
+                        const newNextW = Math.max(40, nextStartW - dx);
+                        colEls[i].style.width = newW + 'px';
+                        colEls[i + 1].style.width = newNextW + 'px';
+                    }
+
+                    function onMouseUp() {
+                        handle.classList.remove('active');
+                        document.removeEventListener('mousemove', onMouseMove);
+                        document.removeEventListener('mouseup', onMouseUp);
+                    }
+
+                    document.addEventListener('mousemove', onMouseMove);
+                    document.addEventListener('mouseup', onMouseUp);
+                });
+            });
+        })();
+
+        // --- Live duration timer ---
+        setInterval(() => {
+            document.querySelectorAll('.live-duration[data-start]').forEach(el => {
+                const start = parseFloat(el.dataset.start);
+                if (start) el.textContent = fmtDuration(start, null);
+            });
+        }, 1000);
+
+        // --- Server-Sent Events for instant UI updates ---
+        let _sseRefreshTimer = null;
+        let _ssePending = false;
+
+        function connectSSE() {
+            const es = new EventSource(`${API}/events`);
+            es.onmessage = (event) => {
+                // Debounce: batch rapid events into a single page refresh
+                if (_sseRefreshTimer) return;
+                _sseRefreshTimer = setTimeout(() => {
+                    _sseRefreshTimer = null;
+                    if (!_ssePending) {
+                        _ssePending = true;
+                        Promise.all([fetchTests(), fetchStatus()]).finally(() => { _ssePending = false; });
+                    }
+                }, 500);
+            };
+            es.onerror = () => {
+                // Reconnect handled automatically by EventSource
+            };
+        }
+
         // --- Init ---
         fetchStatus();
         fetchTests();
         fetchGitRemotes();
         loadVehicles();
         loadRemotes();
+        connectSSE();
+        // Fallback polling (SSE handles real-time; this catches missed events)
         setInterval(fetchStatus, 30000);
-        setInterval(fetchTests, 5000);
+        setInterval(fetchTests, 60000);
     </script>
     <script src="/admin/static/js/metrics.js"></script>
 </body>
