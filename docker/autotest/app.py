@@ -49,14 +49,16 @@ _build_key_locks: dict[str, asyncio.Lock] = {}
 # SITL instance pool — each instance gets unique ports via -I N (port + N*10)
 # This allows concurrent SITL execution without port conflicts.
 #
-# Determinism: cap concurrency at half the host CPU count. With --speedup 100
-# every SITL aggressively asks for CPU; if we oversubscribe, the autotest
-# Python framework's wall-clock-paced operations (MAVLink RTT, pexpect, etc.)
-# diverge run-to-run and previously-passing tests fail flakily under load.
-# 24 logical CPUs on the Unraid host → 12 slots leaves headroom for compile
-# and host services. The pool is reused across batches so first-fit ordering
-# stays stable for a given batch composition.
-MAX_SITL_INSTANCES = max(1, (os.cpu_count() or 16) // 2)
+# Determinism: cap concurrency at a third of the host CPU count. With
+# --speedup 100 every SITL aggressively asks for CPU; if we oversubscribe,
+# the autotest Python framework's wall-clock-paced operations (MAVLink RTT,
+# pexpect, etc.) diverge run-to-run and previously-passing tests fail
+# flakily under load. 24 logical CPUs on the Unraid host → 8 slots leaves
+# 16 cores headroom for compile, pyc rewrite, host services, and filesystem
+# cache effects. /2 still produced batch-only EKF variance drift in
+# timing-sensitive tests (ExtPosAidingStability60s hitting 0.73 vs 0.70
+# threshold); /3 keeps pipe jitter below what those tests tolerate.
+MAX_SITL_INSTANCES = max(1, (os.cpu_count() or 16) // 3)
 sitl_instance_pool = asyncio.Queue()
 for _i in range(MAX_SITL_INSTANCES):
     sitl_instance_pool.put_nowait(_i)
@@ -716,6 +718,23 @@ async def get_or_create_build_template(
         err_msg = out[-500:]
         _build_failures[key] = err_msg
         raise RuntimeError(f"Build failed: {err_msg}")
+
+    # Precompile Python bytecode into the build template so every test
+    # overlay reads .pyc from the lower layer instead of racing to write
+    # fresh .pyc files into its own upperdir. The jitter from concurrent
+    # pyc rewrites ("import Tools.autotest.vehicle_test_suite" first touch
+    # in 8 parallel overlays) was adding hundreds of ms of wall-clock skew
+    # to the autotest startup path, which fed straight into MAVLink
+    # pacing during EKF convergence windows. Compilation failures are
+    # logged but non-fatal — absent .pyc just reverts to the previous
+    # run-to-run jitter.
+    if log_cb:
+        log_cb("=== Precompiling Tools/autotest .pyc ===\n")
+    await run_cmd(
+        ["python3", "-m", "compileall", "-q", "-j", "4",
+         "Tools/autotest", "libraries/AP_HAL_SITL"],
+        cwd=bld_path, timeout=60, log_cb=log_cb,
+    )
 
     async with _build_cache_guard:
         build_cache[key] = {"path": bld_path, "last_used": time.time()}
