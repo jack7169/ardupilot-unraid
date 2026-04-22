@@ -47,18 +47,12 @@ _build_cache_guard = asyncio.Lock()  # protects build_cache dict only
 _build_key_locks: dict[str, asyncio.Lock] = {}
 
 # SITL instance pool — each instance gets unique ports via -I N (port + N*10)
-# This allows concurrent SITL execution without port conflicts.
-#
-# Determinism: cap concurrency at a third of the host CPU count. With
-# --speedup 100 every SITL aggressively asks for CPU; if we oversubscribe,
-# the autotest Python framework's wall-clock-paced operations (MAVLink RTT,
-# pexpect, etc.) diverge run-to-run and previously-passing tests fail
-# flakily under load. 24 logical CPUs on the Unraid host → 8 slots leaves
-# 16 cores headroom for compile, pyc rewrite, host services, and filesystem
-# cache effects. /2 still produced batch-only EKF variance drift in
-# timing-sensitive tests (ExtPosAidingStability60s hitting 0.73 vs 0.70
-# threshold); /3 keeps pipe jitter below what those tests tolerate.
-MAX_SITL_INSTANCES = max(1, (os.cpu_count() or 16) // 3)
+# This allows concurrent SITL execution without port conflicts. The user
+# explicitly wants 50 parallel runs — determinism must come from removing
+# wall-clock dependencies in the simulation and the test framework
+# (SIM_DETERMINISTIC=1, SIM_RNG_SEED=42, PYTHONHASHSEED=0, per-test
+# random.seed, pyc precompile), not from CPU headroom.
+MAX_SITL_INSTANCES = 50
 sitl_instance_pool = asyncio.Queue()
 for _i in range(MAX_SITL_INSTANCES):
     sitl_instance_pool.put_nowait(_i)
