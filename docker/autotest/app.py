@@ -47,8 +47,16 @@ _build_cache_guard = asyncio.Lock()  # protects build_cache dict only
 _build_key_locks: dict[str, asyncio.Lock] = {}
 
 # SITL instance pool — each instance gets unique ports via -I N (port + N*10)
-# This allows concurrent SITL execution without port conflicts
-MAX_SITL_INSTANCES = 50
+# This allows concurrent SITL execution without port conflicts.
+#
+# Determinism: cap concurrency at half the host CPU count. With --speedup 100
+# every SITL aggressively asks for CPU; if we oversubscribe, the autotest
+# Python framework's wall-clock-paced operations (MAVLink RTT, pexpect, etc.)
+# diverge run-to-run and previously-passing tests fail flakily under load.
+# 24 logical CPUs on the Unraid host → 12 slots leaves headroom for compile
+# and host services. The pool is reused across batches so first-fit ordering
+# stays stable for a given batch composition.
+MAX_SITL_INSTANCES = max(1, (os.cpu_count() or 16) // 2)
 sitl_instance_pool = asyncio.Queue()
 for _i in range(MAX_SITL_INSTANCES):
     sitl_instance_pool.put_nowait(_i)
@@ -805,6 +813,12 @@ async def run_test_async(test_id: str, vehicle: str, test_target: str,
         "PYTHONIOENCODING": "utf-8",
         "LANG": os.environ.get("LANG", "C.UTF-8"),
         "LC_ALL": os.environ.get("LC_ALL", "C.UTF-8"),
+        # Pin Python hash randomization seed so dict/set iteration order is
+        # identical run-to-run. Without this, the autotest framework's
+        # set_parameters() submission order, MAVProxy module load order, and
+        # statustext dedup hashes can vary between batches and produce
+        # different message timing — a real source of batch flakiness.
+        "PYTHONHASHSEED": "0",
     }
 
     pinned_commit = commit  # --commit flag from client (None if not pinned)
