@@ -47,12 +47,11 @@ _build_cache_guard = asyncio.Lock()  # protects build_cache dict only
 _build_key_locks: dict[str, asyncio.Lock] = {}
 
 # SITL instance pool — each instance gets unique ports via -I N (port + N*10)
-# This allows concurrent SITL execution without port conflicts. The user
-# explicitly wants 50 parallel runs — determinism must come from removing
-# wall-clock dependencies in the simulation and the test framework
-# (SIM_DETERMINISTIC=1, SIM_RNG_SEED=42, PYTHONHASHSEED=0, per-test
-# random.seed, pyc precompile), not from CPU headroom.
-MAX_SITL_INSTANCES = 50
+# This allows concurrent SITL execution without port conflicts. Determinism
+# must come from removing wall-clock dependencies in the simulation and the
+# test framework (SIM_DETERMINISTIC=1, SIM_RNG_SEED=42, PYTHONHASHSEED=0,
+# per-test random.seed, pyc precompile), not from CPU headroom.
+MAX_SITL_INSTANCES = 16
 sitl_instance_pool = asyncio.Queue()
 for _i in range(MAX_SITL_INSTANCES):
     sitl_instance_pool.put_nowait(_i)
